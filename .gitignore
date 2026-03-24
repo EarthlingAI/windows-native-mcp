@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+
+# Environment
+.env
+.venv/
+
+# uiautomation package log
+@AutomationLog.txt
+
+# IDE
+.idea/
+.vscode/
+*.swp
