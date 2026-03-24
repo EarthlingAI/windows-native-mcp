@@ -80,6 +80,7 @@ INTERACTIVE_TYPES = {
 
 # Hard cap for standard mode to prevent token explosion
 MAX_ELEMENTS_STANDARD = 500
+_MAX_COORD = 65536
 
 
 # ---------------------------------------------------------------------------
@@ -254,6 +255,7 @@ def _walk_standard(
 	coords_unavailable = 0
 	label_counter = 0
 	capped = False
+	explorer_tab_cache: dict[int, set[str] | None] = {}
 
 	queue: deque[uiautomation.Control] = deque()
 	# Seed with children of root
@@ -277,6 +279,10 @@ def _walk_standard(
 		# Ghost filter: (0,0,0,0) + PopupHost → Win11 ghost duplicate
 		if rect == (0, 0, 0, 0) and "PopupHost" in class_name:
 			ghost_filtered += 1
+			continue
+
+		# File Explorer tab filter: skip inactive tab panes
+		if _should_skip_inactive_tab(control, class_name, explorer_tab_cache):
 			continue
 
 		# Collect if interactive
@@ -318,6 +324,7 @@ def _walk_tree(
 	ghost_filtered = 0
 	coords_unavailable = 0
 	label_counter = 0
+	explorer_tab_cache: dict[int, set[str] | None] = {}
 
 	queue: deque[uiautomation.Control] = deque()
 	for child in _safe_get_children(root):
@@ -339,6 +346,10 @@ def _walk_tree(
 		# Ghost filter
 		if rect == (0, 0, 0, 0) and "PopupHost" in class_name:
 			ghost_filtered += 1
+			continue
+
+		# File Explorer tab filter: skip inactive tab panes
+		if _should_skip_inactive_tab(control, class_name, explorer_tab_cache):
 			continue
 
 		# Collect based on filter
@@ -579,7 +590,13 @@ def _get_raw_rect(
 	"""Get the BoundingRectangle as a (left, top, right, bottom) tuple."""
 	try:
 		rect = control.BoundingRectangle
-		return (rect.left, rect.top, rect.right, rect.bottom)
+		left, top, right, bottom = rect.left, rect.top, rect.right, rect.bottom
+		# Filter sentinel/garbage values from UIA (Rect.Empty → INT32_MAX,
+		# Chromium unclipped offscreen coords). 65536 covers 16K multi-monitor.
+		if (abs(left) > _MAX_COORD or abs(top) > _MAX_COORD
+				or abs(right) > _MAX_COORD or abs(bottom) > _MAX_COORD):
+			return (0, 0, 0, 0)
+		return (left, top, right, bottom)
 	except Exception:
 		return (0, 0, 0, 0)
 
@@ -615,6 +632,90 @@ def _try_clickable_point(
 		return (None, None)
 	except Exception:
 		return (None, None)
+
+
+def _get_active_tab_names(
+	parent_control: uiautomation.Control,
+) -> set[str] | None:
+	"""Get names of selected tabs from a TabControl in the parent's subtree.
+
+	Used to filter inactive File Explorer tab panes (ShellTabWindowClass).
+	Searches up to 4 levels deep (Explorer's TabControl is at depth 2-3
+	inside DesktopChildSiteBridge > InputSiteWindowClass > TabControl).
+	Returns set of active tab names, or None if no TabControl found.
+	"""
+	active_names = set()
+
+	# Shallow BFS to find TabControl (max depth 4)
+	search_queue: deque[tuple[uiautomation.Control, int]] = deque()
+	for child in _safe_get_children(parent_control):
+		search_queue.append((child, 0))
+
+	while search_queue:
+		ctrl, depth = search_queue.popleft()
+		if depth > 4:
+			continue
+		try:
+			if ctrl.ControlTypeName == "TabControl":
+				# TabItemControl may be direct children or nested inside
+				# a ListControl (Explorer: TabControl > ListControl > TabItemControl)
+				tab_items_queue = deque(_safe_get_children(ctrl))
+				for _ in range(200):  # Safety limit
+					if not tab_items_queue:
+						break
+					item = tab_items_queue.popleft()
+					try:
+						item_type = item.ControlTypeName
+						if item_type == "TabItemControl":
+							pattern = item.GetSelectionItemPattern()
+							if pattern and pattern.IsSelected:
+								name = item.Name or ""
+								if name:
+									active_names.add(name)
+						elif item_type in ("ListControl", "GroupControl"):
+							# Descend into containers that wrap TabItemControls
+							tab_items_queue.extend(_safe_get_children(item))
+					except Exception:
+						continue
+				if active_names:
+					return active_names
+			# Descend further (but not into ShellTabWindowClass panes)
+			if depth < 4:
+				for child in _safe_get_children(ctrl):
+					search_queue.append((child, depth + 1))
+		except Exception:
+			continue
+
+	return active_names if active_names else None
+
+
+def _should_skip_inactive_tab(
+	control: uiautomation.Control,
+	class_name: str,
+	cache: dict[int, set[str] | None],
+) -> bool:
+	"""Check if a ShellTabWindowClass pane belongs to an inactive Explorer tab.
+
+	Caches active tab lookups per parent handle to avoid repeated COM calls.
+	Returns True if the control should be skipped (inactive tab pane).
+	"""
+	if class_name != "ShellTabWindowClass":
+		return False
+
+	try:
+		parent = control.GetParentControl()
+		if parent is None:
+			return False
+		parent_handle = _get_native_handle(parent)
+		if parent_handle not in cache:
+			cache[parent_handle] = _get_active_tab_names(parent)
+		active_names = cache[parent_handle]
+		if active_names is None:
+			return False  # No TabControl found — don't skip
+		control_name = control.Name or ""
+		return control_name not in active_names
+	except Exception:
+		return False  # On any error, don't skip (safe fallback)
 
 
 def _safe_get_children(

@@ -186,6 +186,76 @@ def test_snapshot_minimal():
 		f"got {metadata.get('element_count', 0)}")
 
 
+def test_raw_rect_validation():
+	"""Test that _get_raw_rect filters garbage UIA values."""
+	print("\n--- Raw Rect Validation Tests ---")
+
+	from windows_native_mcp.core.uia import _get_raw_rect, _MAX_COORD
+
+	check("_MAX_COORD is 65536", _MAX_COORD == 65536)
+
+	# Mock control with sentinel values
+	class FakeControl:
+		class BoundingRectangle:
+			left = 2147483647
+			top = 0
+			right = 2147483647
+			bottom = 100
+
+	result = _get_raw_rect(FakeControl())
+	check("sentinel rect filtered to (0,0,0,0)", result == (0, 0, 0, 0))
+
+	# Mock control with valid values
+	class GoodControl:
+		class BoundingRectangle:
+			left = 100
+			top = 200
+			right = 500
+			bottom = 400
+
+	result = _get_raw_rect(GoodControl())
+	check("valid rect passes through", result == (100, 200, 500, 400))
+
+	# Mock control with negative large values
+	class NegativeControl:
+		class BoundingRectangle:
+			left = -100000
+			top = 200
+			right = 500
+			bottom = 400
+
+	result = _get_raw_rect(NegativeControl())
+	check("negative large rect filtered", result == (0, 0, 0, 0))
+
+
+def test_app_args_parameter():
+	"""Test that the app tool schema includes the args parameter."""
+	print("\n--- App Args Parameter Tests ---")
+
+	from windows_native_mcp.main import mcp
+	tool_list = asyncio.run(mcp.list_tools())
+	tools = {t.name: t for t in tool_list}
+
+	if "app" in tools:
+		schema = tools["app"].parameters
+		props = schema.get("properties", {})
+		check("app tool has 'args' parameter", "args" in props, f"got {list(props.keys())}")
+	else:
+		check("app tool found", False)
+
+
+def test_shellexecuteinfo():
+	"""Test SHELLEXECUTEINFO struct has valid size."""
+	print("\n--- ShellExecuteInfo Tests ---")
+
+	import ctypes
+	from windows_native_mcp.tools.app import SHELLEXECUTEINFO
+
+	size = ctypes.sizeof(SHELLEXECUTEINFO)
+	# 64-bit: 112 bytes, 32-bit: 60 bytes
+	check("SHELLEXECUTEINFO size valid", size in (60, 112), f"got {size}")
+
+
 def test_screen():
 	"""Test screen module functions."""
 	print("\n--- Screen Tests ---")
@@ -209,6 +279,9 @@ if __name__ == "__main__":
 	test_imports()
 	test_tool_registration()
 	test_state()
+	test_raw_rect_validation()
+	test_app_args_parameter()
+	test_shellexecuteinfo()
 	test_screen()
 	test_window_list()
 	test_snapshot_minimal()

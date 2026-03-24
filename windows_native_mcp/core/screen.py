@@ -26,11 +26,13 @@ except (AttributeError, OSError):
 def get_dpi_scale() -> float:
 	"""Get the DPI scale factor for the primary monitor."""
 	try:
+		# Set proper return type for 64-bit pointer safety
+		ctypes.windll.user32.GetDC.restype = ctypes.c_void_p
 		hdc = ctypes.windll.user32.GetDC(0)
 		dpi = ctypes.windll.gdi32.GetDeviceCaps(hdc, 88)  # LOGPIXELSX
 		ctypes.windll.user32.ReleaseDC(0, hdc)
 		return dpi / 96.0
-	except (AttributeError, OSError):
+	except (AttributeError, OSError, OverflowError):
 		return 1.0
 
 
@@ -64,6 +66,7 @@ def annotate_screenshot(
 	"""
 	img = image.copy()
 	draw = ImageDraw.Draw(img)
+	img_w, img_h = img.size
 
 	# Try to get a small font; fall back to default
 	try:
@@ -82,31 +85,41 @@ def annotate_screenshot(
 		px_right = int(right * scale_factor)
 		px_bottom = int(bottom * scale_factor)
 
-		# Skip tiny elements
+		# Clamp to image bounds (elements can have negative or offscreen coords
+		# from multi-monitor setups or Chromium's unclipped accessibility tree)
+		px_left = max(0, min(px_left, img_w))
+		px_top = max(0, min(px_top, img_h))
+		px_right = max(0, min(px_right, img_w))
+		px_bottom = max(0, min(px_bottom, img_h))
+
+		# Skip tiny elements (after clamping)
 		if (px_right - px_left) < 8 or (px_bottom - px_top) < 8:
 			continue
 
-		# Draw bounding box
-		draw.rectangle(
-			[px_left, px_top, px_right, px_bottom],
-			outline="#FF4444",
-			width=1,
-		)
+		try:
+			# Draw bounding box
+			draw.rectangle(
+				[px_left, px_top, px_right, px_bottom],
+				outline="#FF4444",
+				width=1,
+			)
 
-		# Draw label badge at top-left corner
-		text = str(label)
-		bbox = font.getbbox(text)
-		text_w = bbox[2] - bbox[0]
-		text_h = bbox[3] - bbox[1]
-		badge_x = px_left
-		badge_y = max(px_top - text_h - 4, 0)
+			# Draw label badge at top-left corner
+			text = str(label)
+			bbox = font.getbbox(text)
+			text_w = bbox[2] - bbox[0]
+			text_h = bbox[3] - bbox[1]
+			badge_x = px_left
+			badge_y = max(px_top - text_h - 4, 0)
 
-		# Background for readability
-		draw.rectangle(
-			[badge_x, badge_y, badge_x + text_w + 4, badge_y + text_h + 4],
-			fill="#FF4444",
-		)
-		draw.text((badge_x + 2, badge_y + 2), text, fill="white", font=font)
+			# Background for readability
+			draw.rectangle(
+				[badge_x, badge_y, badge_x + text_w + 4, badge_y + text_h + 4],
+				fill="#FF4444",
+			)
+			draw.text((badge_x + 2, badge_y + 2), text, fill="white", font=font)
+		except (OverflowError, ValueError):
+			continue  # Skip this label if drawing still fails
 
 	return img
 

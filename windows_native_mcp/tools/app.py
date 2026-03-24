@@ -2,8 +2,10 @@
 import ctypes
 import ctypes.wintypes
 import logging
-import subprocess
+import shutil
 import time
+import winreg
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from typing import Annotated, Literal
 
 from fastmcp import FastMCP
@@ -24,6 +26,32 @@ SW_RESTORE = 9
 SW_SHOW = 5
 SW_MINIMIZE = 6
 GW_OWNER = 4
+
+
+class SHELLEXECUTEINFO(ctypes.Structure):
+	_fields_ = [
+		("cbSize", ctypes.wintypes.DWORD),
+		("fMask", ctypes.c_ulong),
+		("hwnd", ctypes.wintypes.HWND),
+		("lpVerb", ctypes.c_wchar_p),
+		("lpFile", ctypes.c_wchar_p),
+		("lpParameters", ctypes.c_wchar_p),
+		("lpDirectory", ctypes.c_wchar_p),
+		("nShow", ctypes.c_int),
+		("hInstApp", ctypes.wintypes.HINSTANCE),
+		("lpIDList", ctypes.c_void_p),
+		("lpClass", ctypes.c_wchar_p),
+		("hkeyClass", ctypes.wintypes.HKEY),
+		("dwHotKey", ctypes.wintypes.DWORD),
+		("hIcon", ctypes.wintypes.HANDLE),
+		("hProcess", ctypes.wintypes.HANDLE),
+	]
+
+SEE_MASK_NOCLOSEPROCESS = 0x00000040
+SEE_MASK_FLAG_NO_UI = 0x00000400
+
+# Thread pool for non-blocking ShellExecuteExW calls
+_launch_pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="shell-launch")
 
 # Size presets (calculated relative to screen dimensions)
 SIZE_PRESETS = {
@@ -119,6 +147,74 @@ def _calculate_preset_rect(preset: str, screen_w: int, screen_h: int) -> tuple[i
 	return presets[preset]
 
 
+def _can_resolve(target: str) -> bool:
+	"""Check if target resolves to something launchable.
+
+	Checks PATH, App Paths registry, and protocol handlers.
+	Returns False for unknown names (prevents ShellExecuteExW blocking).
+	"""
+	# Protocol URIs (ms-settings:, calculator:, etc.) — always allow
+	if ":" in target:
+		return True
+
+	# Check PATH + PATHEXT (covers 'notepad', 'calc', etc.)
+	if shutil.which(target):
+		return True
+
+	# Check App Paths registry (covers 'winword', 'excel', etc.)
+	for suffix in ("", ".exe"):
+		try:
+			key = winreg.OpenKey(
+				winreg.HKEY_LOCAL_MACHINE,
+				rf"SOFTWARE\Microsoft\Windows\CurrentVersion\App Paths\{target}{suffix}",
+			)
+			winreg.CloseKey(key)
+			return True
+		except OSError:
+			pass
+
+	return False
+
+
+def _shell_execute(target: str, args: str | None = None) -> tuple[bool, int]:
+	"""Launch via ShellExecuteExW. Returns (success, hProcess handle).
+
+	Uses pre-validation to avoid blocking on unknown app names,
+	SEE_MASK_FLAG_NO_UI to suppress error dialogs, and a thread
+	timeout as a safety net against unexpected blocking.
+	"""
+	# Pre-validate to avoid blocking on "Open with" dialog
+	if not _can_resolve(target):
+		return (False, 0)
+
+	def _do_execute():
+		sei = SHELLEXECUTEINFO()
+		sei.cbSize = ctypes.sizeof(SHELLEXECUTEINFO)
+		sei.fMask = SEE_MASK_NOCLOSEPROCESS | SEE_MASK_FLAG_NO_UI
+		sei.lpVerb = "open"
+		sei.lpFile = target
+		sei.lpParameters = args
+		sei.nShow = SW_SHOW
+		success = ctypes.windll.shell32.ShellExecuteExW(ctypes.byref(sei))
+		return (bool(success), sei.hProcess or 0)
+
+	# Thread timeout safety net (5s) — catches edge cases that pass
+	# validation but still show a blocking dialog
+	future = _launch_pool.submit(_do_execute)
+	try:
+		return future.result(timeout=5)
+	except FutureTimeout:
+		logging.warning("ShellExecuteExW timed out for '%s' (dialog likely blocking)", target)
+		return (False, 0)
+
+
+def _is_error_dialog(hwnd: int) -> bool:
+	"""Check if a window is a standard Windows error dialog (#32770)."""
+	class_buf = ctypes.create_unicode_buffer(256)
+	user32.GetClassNameW(hwnd, class_buf, 256)
+	return class_buf.value == "#32770"
+
+
 def register(mcp: FastMCP):
 	"""Register the app tool."""
 
@@ -144,6 +240,10 @@ def register(mcp: FastMCP):
 		handle: Annotated[
 			int | None,
 			Field(description="Window handle from list mode (more reliable than name)"),
+		] = None,
+		args: Annotated[
+			str | None,
+			Field(description="Arguments to pass to the application (e.g., a file path or URL)"),
 		] = None,
 		size: Annotated[
 			list[int] | str | None,
@@ -183,22 +283,39 @@ def register(mcp: FastMCP):
 						"already_running": True,
 					}
 
-			# Not running — launch via cmd /c start
-			try:
-				subprocess.Popen(
-					["cmd", "/c", "start", "", name],
-					stdout=subprocess.DEVNULL,
-					stderr=subprocess.DEVNULL,
-				)
-			except OSError as e:
-				raise ToolError(f"Failed to launch '{name}': {e}")
+			# Snapshot window handles before launch (for diff-based detection)
+			pre_handles = {w["handle"] for w in existing_windows}
 
-			# Poll for new window (up to 5 seconds)
-			for _ in range(50):
+			# Launch via ShellExecuteExW (pre-validates to avoid blocking dialogs)
+			success, h_process = _shell_execute(name, args)
+			if not success:
+				raise ToolError(
+					f"Launch failed: '{name}' not found. "
+					"Not in PATH, App Paths registry, or protocol handlers."
+				)
+
+			# If we got a process handle, wait for it to be ready
+			if h_process:
+				try:
+					user32.WaitForInputIdle(h_process, 5000)
+				except (AttributeError, OSError):
+					pass
+				finally:
+					kernel32.CloseHandle(h_process)
+
+			# Poll for new window via handle diff (up to 10 seconds)
+			for _ in range(100):
 				time.sleep(0.1)
-				windows = get_window_list()
-				for win in windows:
-					if name.lower() in win["title"].lower():
+				for win in get_window_list():
+					if win["handle"] not in pre_handles:
+						# Check if it's an error dialog (false positive)
+						if _is_error_dialog(win["handle"]):
+							user32.PostMessageW(win["handle"], WM_CLOSE, 0, 0)
+							desktop_state.invalidate()
+							raise ToolError(
+								f"Launch failed: '{name}' not found "
+								"(Windows error dialog detected)"
+							)
 						desktop_state.invalidate()
 						logging.info(f"App launch: '{name}' → handle {win['handle']}")
 						return {
@@ -212,7 +329,7 @@ def register(mcp: FastMCP):
 			return {
 				"launched": name,
 				"handle": None,
-				"note": "App started but window not detected within 5s. Use list mode to find it.",
+				"note": "App started but no new window detected within 10s. Use app(mode='list') to find it.",
 			}
 
 		if mode == "switch":
