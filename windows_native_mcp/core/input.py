@@ -213,7 +213,7 @@ def _get_physical_screen_size() -> tuple[int, int]:
 		h = ctypes.windll.user32.GetSystemMetrics(SM_CYSCREEN)
 		if w > 0 and h > 0:
 			return (w, h)
-	except (AttributeError, OSError):
+	except (AttributeError, OSError, OverflowError):
 		pass
 	return (1920, 1080)
 
@@ -225,9 +225,12 @@ def _to_absolute(x: int, y: int, scale_factor: float) -> tuple[int, int]:
 	then mapped to the 0-65536 range that MOUSEEVENTF_ABSOLUTE expects.
 	"""
 	phys_w, phys_h = _get_physical_screen_size()
-	abs_x = int(x * scale_factor * 65536 / phys_w)
-	abs_y = int(y * scale_factor * 65536 / phys_h)
-	return (abs_x, abs_y)
+	try:
+		abs_x = int(x * scale_factor * 65536 / phys_w)
+		abs_y = int(y * scale_factor * 65536 / phys_h)
+		return (abs_x, abs_y)
+	except (OverflowError, ValueError):
+		return (32768, 32768)
 
 
 # --- Mouse Functions ---

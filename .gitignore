@@ -15,3 +15,6 @@ dist/
 .idea/
 .vscode/
 *.swp
+
+# Diagnostic temp files
+.temp/

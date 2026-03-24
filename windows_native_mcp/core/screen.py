@@ -42,7 +42,7 @@ def get_screen_size() -> tuple[int, int]:
 		width = ctypes.windll.user32.GetSystemMetrics(0)  # SM_CXSCREEN
 		height = ctypes.windll.user32.GetSystemMetrics(1)  # SM_CYSCREEN
 		return (width, height)
-	except (AttributeError, OSError):
+	except (AttributeError, OSError, OverflowError):
 		return (1920, 1080)
 
 

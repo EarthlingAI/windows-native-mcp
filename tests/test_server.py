@@ -271,6 +271,163 @@ def test_screen():
 	check("screen height > 0", h > 0, f"got {h}")
 
 
+def test_hierarchy_fields():
+	"""Verify parent_label and depth on ElementInfo."""
+	print("\n--- Hierarchy Field Tests ---")
+
+	from windows_native_mcp.core.state import ElementInfo
+
+	# Default values
+	elem = ElementInfo(
+		label="1", name="Test", control_type="Button",
+		bounding_rect=(0, 0, 100, 50), center=(50, 25),
+	)
+	check("default parent_label is None", elem.parent_label is None)
+	check("default depth is 0", elem.depth == 0)
+
+	# Explicit values
+	elem2 = ElementInfo(
+		label="2", name="Child", control_type="Edit",
+		bounding_rect=(10, 10, 90, 40), center=(50, 25),
+		parent_label="1", depth=3,
+	)
+	check("explicit parent_label", elem2.parent_label == "1")
+	check("explicit depth", elem2.depth == 3)
+
+
+def test_pua_detection():
+	"""Test _is_pua_only with various inputs."""
+	print("\n--- PUA Detection Tests ---")
+
+	from windows_native_mcp.core.uia import _is_pua_only
+
+	check("single PUA char", _is_pua_only("\uE001") is True)
+	check("multi PUA chars", _is_pua_only("\uE001\uE002") is True)
+	check("mixed text+PUA", _is_pua_only("A\uE001") is False)
+	check("empty string", _is_pua_only("") is False)
+	check("normal text", _is_pua_only("Close") is False)
+	check("PUA with spaces", _is_pua_only(" \uE001 ") is True)
+
+
+def test_scoring():
+	"""Test _score_candidate ranking logic."""
+	print("\n--- Scoring Tests ---")
+
+	from windows_native_mcp.core.uia import _score_candidate, _Candidate
+
+	# Large named element
+	large_named = _Candidate(
+		control_type="ButtonControl", name="Save", automation_id="",
+		is_enabled=True, bounding_rect=(0, 0, 200, 100), center=(100, 50),
+		coords_unavailable=False, depth=2, parent_idx=-1,
+		area=20000, bfs_order=0,
+	)
+
+	# PUA icon element
+	pua_icon = _Candidate(
+		control_type="ButtonControl", name="\uE001", automation_id="",
+		is_enabled=True, bounding_rect=(0, 0, 16, 16), center=(8, 8),
+		coords_unavailable=False, depth=2, parent_idx=-1,
+		area=256, bfs_order=1,
+	)
+
+	# Offscreen element
+	offscreen = _Candidate(
+		control_type="ButtonControl", name="Hidden", automation_id="",
+		is_enabled=True, bounding_rect=(-500, -500, -400, -400), center=(-450, -450),
+		coords_unavailable=False, depth=2, parent_idx=-1,
+		area=10000, bfs_order=2,
+	)
+
+	# Empty-name container
+	empty_container = _Candidate(
+		control_type="ToolBarControl", name="", automation_id="",
+		is_enabled=True, bounding_rect=(0, 0, 100, 30), center=(50, 15),
+		coords_unavailable=False, depth=1, parent_idx=-1,
+		area=3000, bfs_order=3,
+	)
+
+	s_large = _score_candidate(large_named, 1920, 1080)
+	s_pua = _score_candidate(pua_icon, 1920, 1080)
+	s_offscreen = _score_candidate(offscreen, 1920, 1080)
+	s_empty = _score_candidate(empty_container, 1920, 1080)
+
+	check("large named > PUA icon", s_large > s_pua)
+	check("onscreen > offscreen", s_large > s_offscreen)
+	check("named > empty container", s_large > s_empty)
+	check("PUA penalized (score reasonable)", s_pua < s_large - 20)
+
+
+def test_tree_output():
+	"""Test _build_tree_output nesting logic."""
+	print("\n--- Tree Output Tests ---")
+
+	from windows_native_mcp.core.state import ElementInfo
+	from windows_native_mcp.tools.snapshot import _build_tree_output
+
+	elements = {
+		"1": ElementInfo(
+			label="1", name="Panel", control_type="Button",
+			bounding_rect=(0, 0, 800, 600), center=(400, 300),
+			parent_label=None, depth=0,
+		),
+		"2": ElementInfo(
+			label="2", name="Save", control_type="Button",
+			bounding_rect=(10, 10, 100, 40), center=(55, 25),
+			parent_label="1", depth=1,
+		),
+		"3": ElementInfo(
+			label="3", name="Cancel", control_type="Button",
+			bounding_rect=(110, 10, 200, 40), center=(155, 25),
+			parent_label="1", depth=1,
+		),
+		"4": ElementInfo(
+			label="4", name="Orphan", control_type="Edit",
+			bounding_rect=(300, 300, 400, 340), center=(350, 320),
+			parent_label="99", depth=2,  # Parent not in set
+		),
+	}
+
+	tree = _build_tree_output(elements, include_rects=False)
+
+	# Element 4 has parent_label="99" which is not in elements, so it becomes root
+	check("tree has 2 roots", len(tree) == 2, f"got {len(tree)}")
+
+	# Find the Panel root
+	panel_root = next((n for n in tree if n.get("label") == "1"), None)
+	check("Panel root exists", panel_root is not None)
+	if panel_root:
+		check("Panel has children", "children" in panel_root)
+		check("Panel has 2 children", len(panel_root.get("children", [])) == 2)
+
+	# Orphan is a root
+	orphan_root = next((n for n in tree if n.get("label") == "4"), None)
+	check("Orphan becomes root", orphan_root is not None)
+
+	# Test with include_rects=True
+	tree_rects = _build_tree_output(elements, include_rects=True)
+	first = tree_rects[0] if tree_rects else {}
+	check("rect included when requested", "rect" in first)
+
+
+def test_snapshot_new_params():
+	"""Verify snapshot tool schema includes new parameters."""
+	print("\n--- Snapshot New Params Tests ---")
+
+	from windows_native_mcp.main import mcp
+	tool_list = asyncio.run(mcp.list_tools())
+	tools = {t.name: t for t in tool_list}
+
+	if "snapshot" in tools:
+		schema = tools["snapshot"].parameters
+		props = schema.get("properties", {})
+		check("snapshot has 'include_rects' param", "include_rects" in props)
+		check("snapshot has 'types' param", "types" in props)
+		check("snapshot has 'limit' param", "limit" in props)
+	else:
+		check("snapshot tool found", False)
+
+
 if __name__ == "__main__":
 	print("=" * 50)
 	print(" Windows Native MCP — Gate 1 Tests")
@@ -285,6 +442,11 @@ if __name__ == "__main__":
 	test_screen()
 	test_window_list()
 	test_snapshot_minimal()
+	test_hierarchy_fields()
+	test_pua_detection()
+	test_scoring()
+	test_tree_output()
+	test_snapshot_new_params()
 
 	print(f"\n{'=' * 50}")
 	print(f" Results: {passed} passed, {failed} failed")

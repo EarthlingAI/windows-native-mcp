@@ -6,7 +6,7 @@ MCP server for Windows 11+ desktop automation. Provides 6 tools for screenshot c
 
 | Tool | Purpose |
 |------|---------|
-| `snapshot` | Screenshot + UI tree + numbered element labels |
+| `snapshot` | Screenshot + hierarchical UI tree + scored element labels |
 | `click` | Mouse click/hover/drag via SendInput |
 | `type_text` | Text input via SendInput or clipboard paste |
 | `scroll` | Mouse wheel via SendInput |
@@ -52,6 +52,13 @@ windows_native_mcp/
     ├── uia.py       # UI Automation wrapper
     └── input.py     # SendInput (mouse + keyboard + clipboard)
 ```
+
+## Future Enhancements
+
+- Region/area parameter (scope to sub-region of window)
+- Diff mode (return only changed elements since last snapshot)
+- Element text content extraction (for EditControl/TextControl)
+- Focus state indicator
 
 ## Tests
 

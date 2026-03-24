@@ -17,6 +17,8 @@ class ElementInfo:
 	automation_id: str = ""
 	is_enabled: bool = True
 	coords_unavailable: bool = False  # UWP elements reporting (0,0)
+	parent_label: str | None = None    # Nearest interactive ancestor's label (None = root child)
+	depth: int = 0                     # BFS depth in original tree
 
 
 @dataclass

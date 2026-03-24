@@ -6,9 +6,11 @@ for the Windows Desktop MCP server. All coordinates are in logical pixels.
 import ctypes
 import ctypes.wintypes
 import logging
+import math
 import threading
 import time
 from collections import deque
+from dataclasses import dataclass
 
 import uiautomation
 
@@ -32,6 +34,10 @@ except (AttributeError, OSError):
 		ctypes.windll.user32.SetProcessDPIAware()
 	except (AttributeError, OSError):
 		pass
+
+# 64-bit pointer safety for IsIconic
+ctypes.windll.user32.IsIconic.argtypes = [ctypes.c_void_p]
+ctypes.windll.user32.IsIconic.restype = ctypes.c_int
 
 # Track which threads have COM initialized
 _com_initialized: set[int] = set()
@@ -78,8 +84,6 @@ INTERACTIVE_TYPES = {
 	"TextControl",
 }
 
-# Hard cap for standard mode to prevent token explosion
-MAX_ELEMENTS_STANDARD = 500
 _MAX_COORD = 65536
 
 
@@ -91,6 +95,9 @@ def get_desktop_elements(
 	detail: str = "standard",
 	window_name: str | None = None,
 	scale_factor: float = 1.0,
+	limit: int = 500,
+	type_filter: set[str] | None = None,
+	screen_size: tuple[int, int] = (1920, 1080),
 ) -> tuple[dict[str, ElementInfo], dict]:
 	"""Walk the UI tree and return discovered elements with metadata.
 
@@ -98,6 +105,9 @@ def get_desktop_elements(
 		detail: Discovery depth — "minimal", "standard", or "full".
 		window_name: Scope to a specific window (exact then substring match).
 		scale_factor: DPI scale factor for coordinate conversion.
+		limit: Max elements for standard mode (scored ranking).
+		type_filter: Override interactive types for standard mode.
+		screen_size: Screen dimensions for scoring offscreen elements.
 
 	Returns:
 		Tuple of (elements_dict keyed by sequential label, metadata_dict).
@@ -108,6 +118,7 @@ def get_desktop_elements(
 	ghost_filtered = 0
 	coords_unavailable = 0
 	capped = False
+	total_candidates = 0
 
 	# Determine root control to walk
 	root = _resolve_root(window_name)
@@ -128,8 +139,9 @@ def get_desktop_elements(
 		)
 	else:
 		# standard (default)
-		elements, ghost_filtered, coords_unavailable, capped = _walk_standard(
-			root, scale_factor,
+		elements, ghost_filtered, coords_unavailable, capped, total_candidates = _walk_and_rank(
+			root, scale_factor, limit=limit, type_filter=type_filter,
+			screen_size=screen_size,
 		)
 
 	elapsed = time.perf_counter() - start
@@ -139,10 +151,13 @@ def get_desktop_elements(
 		f"coords_unavail={coords_unavailable}, {elapsed:.2f}s)"
 	)
 
+	scoring = detail == "standard"
 	metadata = _build_metadata(
 		len(elements), detail, window_name,
 		coords_unavailable, ghost_filtered,
 		capped=capped, elapsed=elapsed,
+		limit=limit, total_candidates=total_candidates,
+		scoring=scoring,
 	)
 	return elements, metadata
 
@@ -241,33 +256,90 @@ def get_window_list() -> list[dict]:
 # Tree walking internals
 # ---------------------------------------------------------------------------
 
-def _walk_standard(
+@dataclass
+class _Candidate:
+	"""Pre-label element data from Pass 1 BFS."""
+	control_type: str          # Full name for matching (e.g. "ButtonControl")
+	name: str
+	automation_id: str
+	is_enabled: bool
+	bounding_rect: tuple[int, int, int, int]
+	center: tuple[int, int]
+	coords_unavailable: bool
+	depth: int
+	parent_idx: int            # Index of nearest interactive ancestor in candidates list (-1 = root)
+	area: int                  # (right-left) * (bottom-top)
+	bfs_order: int             # Original BFS position (for stable sort tiebreaker)
+
+
+_CONTAINER_TYPES_FULL = {"ToolBarControl", "MenuBarControl", "ScrollBarControl"}
+
+
+def _is_pua_only(name: str) -> bool:
+	"""Check if a string contains only Private Use Area Unicode characters."""
+	stripped = name.strip()
+	if not stripped:
+		return False
+	return all(0xE000 <= ord(c) <= 0xF8FF or 0xF0000 <= ord(c) <= 0x10FFFF for c in stripped)
+
+
+def _score_candidate(c: _Candidate, screen_w: int, screen_h: int) -> float:
+	"""Score a candidate element for ranking. Higher = more important."""
+	# Area (log scale so giant text areas don't dominate)
+	score = math.log2(max(c.area, 1) + 1) * 10  # ~200 for 9.4M, ~100 for 1000, ~0 for 0
+
+	# Name quality
+	if c.name.strip():
+		if _is_pua_only(c.name):
+			score -= 50
+		else:
+			score += 30
+
+	# Empty-name container penalty
+	if not c.name.strip() and c.control_type in _CONTAINER_TYPES_FULL:
+		score -= 40
+
+	# Offscreen penalty
+	if c.center[0] < 0 or c.center[1] < 0 or c.center[0] > screen_w or c.center[1] > screen_h:
+		score -= 100
+
+	# Coords unavailable penalty
+	if c.coords_unavailable:
+		score -= 20
+
+	return score
+
+
+def _walk_and_rank(
 	root: uiautomation.Control,
 	scale_factor: float,
-) -> tuple[dict[str, ElementInfo], int, int, bool]:
-	"""Standard mode: BFS walk collecting only interactive types, with cap.
+	limit: int = 500,
+	type_filter: set[str] | None = None,
+	screen_size: tuple[int, int] = (1920, 1080),
+) -> tuple[dict[str, ElementInfo], int, int, bool, int]:
+	"""Standard mode: two-pass BFS walk with scoring and ranking.
+
+	Pass 1: Full BFS collecting all interactive candidates (no cap).
+	Pass 2: Score, rank, take top `limit`, assign labels and parent_label.
 
 	Returns:
-		(elements, ghost_filtered_count, coords_unavailable_count, was_capped)
+		(elements, ghost_filtered_count, coords_unavailable_count, was_capped, total_candidates)
 	"""
-	elements: dict[str, ElementInfo] = {}
+	candidates: list[_Candidate] = []
 	ghost_filtered = 0
-	coords_unavailable = 0
-	label_counter = 0
-	capped = False
+	coords_unavailable_count = 0
+	bfs_counter = 0
 	explorer_tab_cache: dict[int, set[str] | None] = {}
+	interactive_types = type_filter if type_filter else INTERACTIVE_TYPES
 
-	queue: deque[uiautomation.Control] = deque()
-	# Seed with children of root
+	# --- Pass 1: Full BFS walk (no cap) ---
+	# Queue entries: (control, depth, parent_candidate_idx)
+	queue: deque[tuple[uiautomation.Control, int, int]] = deque()
 	for child in _safe_get_children(root):
-		queue.append(child)
+		queue.append((child, 0, -1))
 
 	while queue:
-		if label_counter >= MAX_ELEMENTS_STANDARD:
-			capped = True
-			break
-
-		control = queue.popleft()
+		control, depth, parent_candidate_idx = queue.popleft()
 
 		try:
 			ctrl_type = control.ControlTypeName or ""
@@ -285,22 +357,120 @@ def _walk_standard(
 		if _should_skip_inactive_tab(control, class_name, explorer_tab_cache):
 			continue
 
-		# Collect if interactive
-		if ctrl_type in INTERACTIVE_TYPES:
-			info, is_coords_unavail = _build_element_info(
-				control, ctrl_type, rect, class_name, label_counter + 1, scale_factor,
+		my_idx = parent_candidate_idx  # Default: pass-through parent
+
+		# Check if interactive
+		if ctrl_type in interactive_types:
+			try:
+				name = control.Name or ""
+				automation_id = control.AutomationId or ""
+				is_enabled = True
+				try:
+					is_enabled = control.IsEnabled
+				except Exception:
+					pass
+			except Exception:
+				# Can't read properties — skip this element but continue walking
+				for child in _safe_get_children(control):
+					queue.append((child, depth + 1, parent_candidate_idx))
+				continue
+
+			# Build bounding rect and center (similar to _build_element_info but inline)
+			left, top, right, bottom = rect
+			c_coords_unavailable = False
+
+			if rect == (0, 0, 0, 0):
+				cx, cy = _try_clickable_point(control)
+				if cx is not None and cy is not None:
+					left = cx - 5
+					top = cy - 5
+					right = cx + 5
+					bottom = cy + 5
+				else:
+					c_coords_unavailable = True
+
+			if scale_factor > 1.0 and not c_coords_unavailable:
+				left = int(left / scale_factor)
+				top = int(top / scale_factor)
+				right = int(right / scale_factor)
+				bottom = int(bottom / scale_factor)
+
+			if c_coords_unavailable:
+				center = (0, 0)
+			else:
+				center = ((left + right) // 2, (top + bottom) // 2)
+
+			area = max(0, (right - left)) * max(0, (bottom - top))
+
+			candidate = _Candidate(
+				control_type=ctrl_type,
+				name=name,
+				automation_id=automation_id,
+				is_enabled=is_enabled,
+				bounding_rect=(left, top, right, bottom),
+				center=center,
+				coords_unavailable=c_coords_unavailable,
+				depth=depth,
+				parent_idx=parent_candidate_idx,
+				area=area,
+				bfs_order=bfs_counter,
 			)
-			if info is not None:
-				label_counter += 1
-				elements[info.label] = info
-				if is_coords_unavail:
-					coords_unavailable += 1
+			candidates.append(candidate)
+			my_idx = len(candidates) - 1
+			bfs_counter += 1
 
-		# Always descend into children (interactive elements may be nested)
+			if c_coords_unavailable:
+				coords_unavailable_count += 1
+
+		# Always descend into children
 		for child in _safe_get_children(control):
-			queue.append(child)
+			queue.append((child, depth + 1, my_idx))
 
-	return elements, ghost_filtered, coords_unavailable, capped
+	# --- Pass 2: Score, rank, select top `limit` ---
+	total_candidates = len(candidates)
+	capped = total_candidates > limit
+
+	screen_w, screen_h = screen_size
+	scored = [(i, _score_candidate(c, screen_w, screen_h)) for i, c in enumerate(candidates)]
+	scored.sort(key=lambda x: (-x[1], candidates[x[0]].bfs_order))
+	selected_indices = [i for i, _ in scored[:limit]]
+
+	# Build mapping: original_candidate_idx → assigned_label
+	selected_set = set(selected_indices)
+	idx_to_label: dict[int, str] = {}
+	for label_num, orig_idx in enumerate(selected_indices, start=1):
+		idx_to_label[orig_idx] = str(label_num)
+
+	# Resolve parent_label for each selected candidate
+	elements: dict[str, ElementInfo] = {}
+	for orig_idx in selected_indices:
+		c = candidates[orig_idx]
+		ctrl_type_clean = c.control_type.removesuffix("Control")
+
+		# Walk up parent chain to find nearest selected ancestor
+		parent_label = None
+		walk_idx = c.parent_idx
+		while walk_idx >= 0:
+			if walk_idx in selected_set:
+				parent_label = idx_to_label[walk_idx]
+				break
+			walk_idx = candidates[walk_idx].parent_idx
+
+		label = idx_to_label[orig_idx]
+		elements[label] = ElementInfo(
+			label=label,
+			name=c.name,
+			control_type=ctrl_type_clean,
+			bounding_rect=c.bounding_rect,
+			center=c.center,
+			automation_id=c.automation_id,
+			is_enabled=c.is_enabled,
+			coords_unavailable=c.coords_unavailable,
+			parent_label=parent_label,
+			depth=c.depth,
+		)
+
+	return elements, ghost_filtered, coords_unavailable_count, capped, total_candidates
 
 
 def _walk_tree(
@@ -326,15 +496,16 @@ def _walk_tree(
 	label_counter = 0
 	explorer_tab_cache: dict[int, set[str] | None] = {}
 
-	queue: deque[uiautomation.Control] = deque()
+	# Queue: (control, depth, parent_label)
+	queue: deque[tuple[uiautomation.Control, int, str | None]] = deque()
 	for child in _safe_get_children(root):
-		queue.append(child)
+		queue.append((child, 0, None))
 
 	while queue:
 		if max_elements > 0 and label_counter >= max_elements:
 			break
 
-		control = queue.popleft()
+		control, depth, parent_label = queue.popleft()
 
 		try:
 			ctrl_type = control.ControlTypeName or ""
@@ -353,6 +524,7 @@ def _walk_tree(
 			continue
 
 		# Collect based on filter
+		current_label = parent_label  # For children to inherit
 		should_collect = (not filter_interactive) or (ctrl_type in INTERACTIVE_TYPES)
 		if should_collect:
 			info, is_coords_unavail = _build_element_info(
@@ -360,13 +532,17 @@ def _walk_tree(
 			)
 			if info is not None:
 				label_counter += 1
+				info.control_type = ctrl_type.removesuffix("Control")
+				info.parent_label = parent_label
+				info.depth = depth
 				elements[info.label] = info
+				current_label = info.label
 				if is_coords_unavail:
 					coords_unavailable += 1
 
 		# Descend
 		for child in _safe_get_children(control):
-			queue.append(child)
+			queue.append((child, depth + 1, current_label))
 
 	return elements, ghost_filtered, coords_unavailable
 
@@ -545,6 +721,9 @@ def _build_metadata(
 	ghost_filtered_count: int,
 	capped: bool,
 	elapsed: float,
+	limit: int = 500,
+	total_candidates: int = 0,
+	scoring: bool = False,
 ) -> dict:
 	"""Build the metadata dict returned alongside elements."""
 	meta = {
@@ -555,10 +734,14 @@ def _build_metadata(
 		"ghost_filtered_count": ghost_filtered_count,
 		"elapsed_seconds": round(elapsed, 3),
 	}
+	if scoring:
+		meta["scoring"] = True
+		if total_candidates > 0:
+			meta["total_candidates"] = total_candidates
 	if capped:
-		meta["capped_at"] = MAX_ELEMENTS_STANDARD
+		meta["capped_at"] = limit
 		meta["note"] = (
-			f"Element limit ({MAX_ELEMENTS_STANDARD}) reached. "
+			f"Element limit ({limit}) reached. "
 			"Scope to a specific window for complete results."
 		)
 	return meta
@@ -613,7 +796,7 @@ def _is_window_minimized(handle: int) -> bool:
 		return False
 	try:
 		return bool(ctypes.windll.user32.IsIconic(handle))
-	except (AttributeError, OSError):
+	except (AttributeError, OSError, OverflowError):
 		return False
 
 
