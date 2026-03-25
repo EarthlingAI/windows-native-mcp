@@ -6,12 +6,12 @@ MCP server for Windows 11+ desktop automation. Provides 6 tools for screenshot c
 
 | Tool | Purpose |
 |------|---------|
-| `snapshot` | Screenshot + hierarchical UI tree + scored element labels |
+| `snapshot` | Screenshot + hierarchical UI tree + scored element labels + viewport filtering |
 | `click` | Mouse click/hover/drag via SendInput |
 | `type_text` | Text input via SendInput or clipboard paste |
 | `scroll` | Mouse wheel via SendInput |
 | `shortcut` | Keyboard combos via SendInput |
-| `app` | Window launch/switch/resize/close/list/restore |
+| `app` | Window launch (incl. UWP)/switch/resize/close/list-open/list-installed/restore |
 
 ## Setup
 
@@ -59,6 +59,7 @@ windows_native_mcp/
 - Diff mode (return only changed elements since last snapshot)
 - Element text content extraction (for EditControl/TextControl)
 - Focus state indicator
+- CacheRequest optimization (requires uiautomation fork — batch COM reads)
 
 ## Tests
 

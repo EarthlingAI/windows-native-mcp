@@ -1,8 +1,10 @@
-"""App tool — window launch, switch, resize, close, list, restore."""
+"""App tool — window launch, switch, resize, close, list-open, list-installed, restore."""
 import ctypes
 import ctypes.wintypes
+import json
 import logging
 import shutil
+import subprocess
 import time
 import winreg
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
@@ -215,6 +217,22 @@ def _is_error_dialog(hwnd: int) -> bool:
 	return class_buf.value == "#32770"
 
 
+def _resolve_start_app(name: str) -> str | None:
+	"""Query Start Menu for a matching app. Returns AppID or None."""
+	# Sanitize to prevent PowerShell injection
+	safe_name = name.replace("'", "''").replace("`", "``")
+	try:
+		result = subprocess.run(
+			["powershell", "-NoProfile", "-Command",
+			 f"Get-StartApps | Where-Object {{ $_.Name -like '*{safe_name}*' }} | Select-Object -First 1 -ExpandProperty AppID"],
+			capture_output=True, text=True, timeout=5,
+		)
+		app_id = result.stdout.strip()
+		return app_id if app_id else None
+	except (subprocess.TimeoutExpired, OSError):
+		return None
+
+
 def register(mcp: FastMCP):
 	"""Register the app tool."""
 
@@ -230,7 +248,7 @@ def register(mcp: FastMCP):
 	)
 	def app(
 		mode: Annotated[
-			Literal["launch", "switch", "resize", "close", "list", "restore"],
+			Literal["launch", "switch", "resize", "close", "list-open", "list-installed", "restore"],
 			Field(description="Operation mode"),
 		],
 		name: Annotated[
@@ -239,7 +257,11 @@ def register(mcp: FastMCP):
 		] = None,
 		handle: Annotated[
 			int | None,
-			Field(description="Window handle from list mode (more reliable than name)"),
+			Field(description="Window handle from list-open (more reliable than name)"),
+		] = None,
+		app_id: Annotated[
+			str | None,
+			Field(description="AppID from list-installed for precise launch (bypasses name resolution)"),
 		] = None,
 		args: Annotated[
 			str | None,
@@ -256,43 +278,79 @@ def register(mcp: FastMCP):
 	) -> dict | list:
 		"""Manage application windows: launch, switch focus, resize, close, list, or restore.
 
-		Use 'list' mode first to get window handles for reliable targeting.
+		Use 'list-open' to get open window handles for reliable targeting.
+		Use 'list-installed' to discover launchable apps from the Start Menu.
 		For switch mode, handle-based targeting is more reliable than name.
 		"""
-		if mode == "list":
+		if mode == "list-open":
 			windows = get_window_list()
-			logging.info(f"App list: {len(windows)} windows")
+			logging.info(f"App list-open: {len(windows)} windows")
 			return windows
 
+		if mode == "list-installed":
+			try:
+				result = subprocess.run(
+					["powershell", "-NoProfile", "-Command",
+					 "Get-StartApps | ConvertTo-Json"],
+					capture_output=True, text=True, timeout=10,
+				)
+				apps = json.loads(result.stdout) if result.stdout.strip() else []
+				# PowerShell returns a single object (not array) if only one result
+				if isinstance(apps, dict):
+					apps = [apps]
+				logging.info(f"App list-installed: {len(apps)} apps")
+				return apps
+			except (subprocess.TimeoutExpired, OSError) as e:
+				raise ToolError(f"Failed to query installed apps: {e}")
+			except json.JSONDecodeError:
+				raise ToolError("Failed to parse installed apps list")
+
 		if mode == "launch":
-			if not name:
-				raise ToolError("'name' is required for launch mode")
+			if not name and not app_id:
+				raise ToolError("'name' or 'app_id' is required for launch mode")
+
+			launch_label = name or app_id
 
 			# Pre-launch check: if app is already running, switch to it
 			existing_windows = get_window_list()
-			for win in existing_windows:
-				if name.lower() in win["title"].lower():
-					hwnd = win["handle"]
-					_switch_to_window(hwnd)
-					desktop_state.invalidate()
-					logging.info(f"App launch: '{name}' already running → switch to handle {hwnd}")
-					return {
-						"launched": name,
-						"handle": hwnd,
-						"title": win["title"],
-						"already_running": True,
-					}
+			if name:
+				for win in existing_windows:
+					if name.lower() in win["title"].lower():
+						hwnd = win["handle"]
+						_switch_to_window(hwnd)
+						desktop_state.invalidate()
+						logging.info(f"App launch: '{name}' already running → switch to handle {hwnd}")
+						return {
+							"launched": launch_label,
+							"handle": hwnd,
+							"title": win["title"],
+							"already_running": True,
+						}
 
 			# Snapshot window handles before launch (for diff-based detection)
 			pre_handles = {w["handle"] for w in existing_windows}
 
-			# Launch via ShellExecuteExW (pre-validates to avoid blocking dialogs)
-			success, h_process = _shell_execute(name, args)
-			if not success:
-				raise ToolError(
-					f"Launch failed: '{name}' not found. "
-					"Not in PATH, App Paths registry, or protocol handlers."
-				)
+			if app_id:
+				# Direct AppID launch — skip PATH/registry resolution
+				success, h_process = _shell_execute(f"shell:AppsFolder\\{app_id}")
+				if not success:
+					raise ToolError(
+						f"Launch failed: AppID '{app_id}' not found. "
+						"Verify the AppID from app(mode='list-installed')."
+					)
+			else:
+				# Launch via ShellExecuteExW (pre-validates to avoid blocking dialogs)
+				success, h_process = _shell_execute(name, args)
+				if not success:
+					# Fallback: try Start Menu / UWP app resolution
+					resolved_id = _resolve_start_app(name)
+					if resolved_id:
+						success, h_process = _shell_execute(f"shell:AppsFolder\\{resolved_id}")
+					if not success:
+						raise ToolError(
+							f"Launch failed: '{name}' not found. "
+							"Not in PATH, App Paths registry, Start Menu, or protocol handlers."
+						)
 
 			# If we got a process handle, wait for it to be ready
 			if h_process:
@@ -313,23 +371,23 @@ def register(mcp: FastMCP):
 							user32.PostMessageW(win["handle"], WM_CLOSE, 0, 0)
 							desktop_state.invalidate()
 							raise ToolError(
-								f"Launch failed: '{name}' not found "
+								f"Launch failed: '{launch_label}' not found "
 								"(Windows error dialog detected)"
 							)
 						desktop_state.invalidate()
-						logging.info(f"App launch: '{name}' → handle {win['handle']}")
+						logging.info(f"App launch: '{launch_label}' → handle {win['handle']}")
 						return {
-							"launched": name,
+							"launched": launch_label,
 							"handle": win["handle"],
 							"title": win["title"],
 						}
 
 			desktop_state.invalidate()
-			logging.info(f"App launch: '{name}' (window not detected)")
+			logging.info(f"App launch: '{launch_label}' (window not detected)")
 			return {
-				"launched": name,
+				"launched": launch_label,
 				"handle": None,
-				"note": "App started but no new window detected within 10s. Use app(mode='list') to find it.",
+				"note": "App started but no new window detected within 10s. Use app(mode='list-open') to find it.",
 			}
 
 		if mode == "switch":

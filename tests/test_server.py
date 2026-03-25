@@ -428,9 +428,174 @@ def test_snapshot_new_params():
 		check("snapshot tool found", False)
 
 
+def test_overflow_hardening():
+	"""Verify _safe_get_children catches OverflowError."""
+	print("\n--- OverflowError Hardening Tests ---")
+
+	from windows_native_mcp.core.uia import _safe_get_children
+
+	class OverflowControl:
+		def GetChildren(self):
+			raise OverflowError("int too large to convert")
+
+	result = _safe_get_children(OverflowControl())
+	check("OverflowError returns empty list", result == [])
+
+
+def test_viewport_filtering_param():
+	"""Verify snapshot tool schema includes viewport_only parameter."""
+	print("\n--- Viewport Filtering Param Tests ---")
+
+	from windows_native_mcp.main import mcp
+	tool_list = asyncio.run(mcp.list_tools())
+	tools = {t.name: t for t in tool_list}
+
+	if "snapshot" in tools:
+		schema = tools["snapshot"].parameters
+		props = schema.get("properties", {})
+		check("snapshot has 'viewport_only' param", "viewport_only" in props)
+		# Default should be True
+		vp = props.get("viewport_only", {})
+		check("viewport_only default is True", vp.get("default") is True)
+	else:
+		check("snapshot tool found", False)
+
+
+def test_checked_selected_fields():
+	"""Verify ElementInfo new fields: default None, explicit True/False."""
+	print("\n--- Checked/Selected Field Tests ---")
+
+	from windows_native_mcp.core.state import ElementInfo
+
+	# Default values
+	elem = ElementInfo(
+		label="1", name="Test", control_type="CheckBox",
+		bounding_rect=(0, 0, 100, 50), center=(50, 25),
+	)
+	check("default checked is None", elem.checked is None)
+	check("default selected is None", elem.selected is None)
+
+	# Explicit values
+	elem_checked = ElementInfo(
+		label="2", name="Enable", control_type="CheckBox",
+		bounding_rect=(0, 0, 100, 50), center=(50, 25),
+		checked=True,
+	)
+	check("explicit checked=True", elem_checked.checked is True)
+
+	elem_unchecked = ElementInfo(
+		label="3", name="Disable", control_type="CheckBox",
+		bounding_rect=(0, 0, 100, 50), center=(50, 25),
+		checked=False,
+	)
+	check("explicit checked=False", elem_unchecked.checked is False)
+
+	elem_selected = ElementInfo(
+		label="4", name="Option A", control_type="RadioButton",
+		bounding_rect=(0, 0, 100, 50), center=(50, 25),
+		selected=True,
+	)
+	check("explicit selected=True", elem_selected.selected is True)
+
+
+def test_coords_available_count():
+	"""Call get_desktop_elements(detail='minimal'), verify coords_available_count."""
+	print("\n--- Coords Available Count Tests ---")
+
+	from windows_native_mcp.core.uia import get_desktop_elements
+	from windows_native_mcp.core.screen import get_dpi_scale
+
+	scale = get_dpi_scale()
+	elements, metadata = get_desktop_elements(detail="minimal", scale_factor=scale)
+
+	check("metadata has coords_available_count", "coords_available_count" in metadata)
+	if "coords_available_count" in metadata:
+		expected = metadata["element_count"] - metadata["coords_unavailable_count"]
+		check("coords_available_count = element_count - unavailable",
+			metadata["coords_available_count"] == expected)
+
+
+def test_start_app_resolution():
+	"""Test _resolve_start_app with a known app."""
+	print("\n--- Start App Resolution Tests ---")
+
+	from windows_native_mcp.tools.app import _resolve_start_app
+
+	# Notepad should always be available on Windows
+	result = _resolve_start_app("Notepad")
+	check("_resolve_start_app finds Notepad", result is not None and len(result) > 0,
+		f"got {result}")
+
+
+def test_app_mode_names():
+	"""Verify app tool mode enum has list-open and list-installed."""
+	print("\n--- App Mode Names Tests ---")
+
+	from windows_native_mcp.main import mcp
+	tool_list = asyncio.run(mcp.list_tools())
+	tools = {t.name: t for t in tool_list}
+
+	if "app" in tools:
+		schema = tools["app"].parameters
+		mode_prop = schema.get("properties", {}).get("mode", {})
+		# Mode enum values are in anyOf or enum
+		mode_values = set()
+		if "enum" in mode_prop:
+			mode_values = set(mode_prop["enum"])
+		elif "anyOf" in mode_prop:
+			for item in mode_prop["anyOf"]:
+				if "enum" in item:
+					mode_values.update(item["enum"])
+		check("app has list-open mode", "list-open" in mode_values, f"got {mode_values}")
+		check("app has list-installed mode", "list-installed" in mode_values, f"got {mode_values}")
+		check("app no old 'list' mode", "list" not in mode_values, f"got {mode_values}")
+	else:
+		check("app tool found", False)
+
+
+def test_tree_output_checked_selected():
+	"""Verify _build_tree_output includes checked/selected fields."""
+	print("\n--- Tree Output Checked/Selected Tests ---")
+
+	from windows_native_mcp.core.state import ElementInfo
+	from windows_native_mcp.tools.snapshot import _build_tree_output
+
+	elements = {
+		"1": ElementInfo(
+			label="1", name="Dark Mode", control_type="CheckBox",
+			bounding_rect=(0, 0, 200, 30), center=(100, 15),
+			parent_label=None, depth=0, checked=True,
+		),
+		"2": ElementInfo(
+			label="2", name="Option A", control_type="RadioButton",
+			bounding_rect=(0, 30, 200, 60), center=(100, 45),
+			parent_label=None, depth=0, selected=False,
+		),
+		"3": ElementInfo(
+			label="3", name="Plain Button", control_type="Button",
+			bounding_rect=(0, 60, 200, 90), center=(100, 75),
+			parent_label=None, depth=0,
+		),
+	}
+
+	tree = _build_tree_output(elements, include_rects=False)
+
+	checkbox = next((n for n in tree if n.get("label") == "1"), None)
+	check("checkbox has checked field", checkbox is not None and "checked" in checkbox)
+	check("checkbox checked=True", checkbox is not None and checkbox.get("checked") is True)
+
+	radio = next((n for n in tree if n.get("label") == "2"), None)
+	check("radio has selected field", radio is not None and "selected" in radio)
+	check("radio selected=False", radio is not None and radio.get("selected") is False)
+
+	button = next((n for n in tree if n.get("label") == "3"), None)
+	check("plain button no checked field", button is not None and "checked" not in button)
+	check("plain button no selected field", button is not None and "selected" not in button)
+
+
 if __name__ == "__main__":
 	print("=" * 50)
-	print(" Windows Native MCP — Gate 1 Tests")
+	print(" Windows Native MCP — Gate 1 + Phase 2 Tests")
 	print("=" * 50)
 
 	test_imports()
@@ -447,6 +612,13 @@ if __name__ == "__main__":
 	test_scoring()
 	test_tree_output()
 	test_snapshot_new_params()
+	test_overflow_hardening()
+	test_viewport_filtering_param()
+	test_checked_selected_fields()
+	test_coords_available_count()
+	test_start_app_resolution()
+	test_app_mode_names()
+	test_tree_output_checked_selected()
 
 	print(f"\n{'=' * 50}")
 	print(f" Results: {passed} passed, {failed} failed")

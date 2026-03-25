@@ -98,6 +98,7 @@ def get_desktop_elements(
 	limit: int = 500,
 	type_filter: set[str] | None = None,
 	screen_size: tuple[int, int] = (1920, 1080),
+	viewport_only: bool = True,
 ) -> tuple[dict[str, ElementInfo], dict]:
 	"""Walk the UI tree and return discovered elements with metadata.
 
@@ -117,6 +118,7 @@ def get_desktop_elements(
 	elements: dict[str, ElementInfo] = {}
 	ghost_filtered = 0
 	coords_unavailable = 0
+	viewport_filtered = 0
 	capped = False
 	total_candidates = 0
 
@@ -139,10 +141,20 @@ def get_desktop_elements(
 		)
 	else:
 		# standard (default)
-		elements, ghost_filtered, coords_unavailable, capped, total_candidates = _walk_and_rank(
-			root, scale_factor, limit=limit, type_filter=type_filter,
-			screen_size=screen_size,
-		)
+		viewport_rect = None
+		if viewport_only and root is not None:
+			try:
+				vr = root.BoundingRectangle
+				viewport_rect = (vr.left, vr.top, vr.right, vr.bottom)
+			except Exception:
+				pass  # Fall back to no viewport filtering
+		try:
+			elements, ghost_filtered, coords_unavailable, capped, total_candidates, viewport_filtered = _walk_and_rank(
+				root, scale_factor, limit=limit, type_filter=type_filter,
+				screen_size=screen_size, viewport_rect=viewport_rect,
+			)
+		except OverflowError:
+			logging.warning("UIA: OverflowError during standard walk — returning partial results")
 
 	elapsed = time.perf_counter() - start
 	logging.info(
@@ -158,6 +170,7 @@ def get_desktop_elements(
 		capped=capped, elapsed=elapsed,
 		limit=limit, total_candidates=total_candidates,
 		scoring=scoring,
+		viewport_filtered_count=viewport_filtered,
 	)
 	return elements, metadata
 
@@ -270,9 +283,14 @@ class _Candidate:
 	parent_idx: int            # Index of nearest interactive ancestor in candidates list (-1 = root)
 	area: int                  # (right-left) * (bottom-top)
 	bfs_order: int             # Original BFS position (for stable sort tiebreaker)
+	checked: bool | None = None    # True/False for checkboxes/toggles, None if N/A
+	selected: bool | None = None   # True/False for radio buttons, list items, tab items
 
 
 _CONTAINER_TYPES_FULL = {"ToolBarControl", "MenuBarControl", "ScrollBarControl"}
+
+# Control types that need class_name/rect for ghost or tab filtering
+_NEEDS_FILTER_CHECK = {"PaneControl", "WindowControl", "CustomControl", "GroupControl"}
 
 
 def _is_pua_only(name: str) -> bool:
@@ -316,18 +334,21 @@ def _walk_and_rank(
 	limit: int = 500,
 	type_filter: set[str] | None = None,
 	screen_size: tuple[int, int] = (1920, 1080),
-) -> tuple[dict[str, ElementInfo], int, int, bool, int]:
+	max_depth: int = 50,
+	viewport_rect: tuple[int, int, int, int] | None = None,
+) -> tuple[dict[str, ElementInfo], int, int, bool, int, int]:
 	"""Standard mode: two-pass BFS walk with scoring and ranking.
 
 	Pass 1: Full BFS collecting all interactive candidates (no cap).
 	Pass 2: Score, rank, take top `limit`, assign labels and parent_label.
 
 	Returns:
-		(elements, ghost_filtered_count, coords_unavailable_count, was_capped, total_candidates)
+		(elements, ghost_filtered_count, coords_unavailable_count, was_capped, total_candidates, viewport_filtered_count)
 	"""
 	candidates: list[_Candidate] = []
 	ghost_filtered = 0
 	coords_unavailable_count = 0
+	viewport_filtered_count = 0
 	bfs_counter = 0
 	explorer_tab_cache: dict[int, set[str] | None] = {}
 	interactive_types = type_filter if type_filter else INTERACTIVE_TYPES
@@ -343,19 +364,36 @@ def _walk_and_rank(
 
 		try:
 			ctrl_type = control.ControlTypeName or ""
-			class_name = control.ClassName or ""
-			rect = _get_raw_rect(control)
 		except Exception:
 			continue
 
-		# Ghost filter: (0,0,0,0) + PopupHost → Win11 ghost duplicate
-		if rect == (0, 0, 0, 0) and "PopupHost" in class_name:
-			ghost_filtered += 1
-			continue
+		# Lazy reads: only fetch class_name/rect when needed for filtering or interactive
+		need_full = ctrl_type in interactive_types or ctrl_type in _NEEDS_FILTER_CHECK
+		class_name = ""
+		rect = (0, 0, 0, 0)
+		if need_full:
+			try:
+				class_name = control.ClassName or ""
+				rect = _get_raw_rect(control)
+			except Exception:
+				if ctrl_type in interactive_types:
+					# Can't read props for interactive — skip element, still walk children
+					try:
+						for child in _safe_get_children(control):
+							queue.append((child, depth + 1, parent_candidate_idx))
+					except OverflowError:
+						pass
+					continue
+				continue
 
-		# File Explorer tab filter: skip inactive tab panes
-		if _should_skip_inactive_tab(control, class_name, explorer_tab_cache):
-			continue
+			# Ghost filter: (0,0,0,0) + PopupHost → Win11 ghost duplicate
+			if rect == (0, 0, 0, 0) and "PopupHost" in class_name:
+				ghost_filtered += 1
+				continue
+
+			# File Explorer tab filter: skip inactive tab panes
+			if _should_skip_inactive_tab(control, class_name, explorer_tab_cache):
+				continue
 
 		my_idx = parent_candidate_idx  # Default: pass-through parent
 
@@ -400,7 +438,51 @@ def _walk_and_rank(
 			else:
 				center = ((left + right) // 2, (top + bottom) // 2)
 
+			# Viewport filter: skip elements outside the visible area
+			# Also filter coords_unavailable elements — in virtualized lists
+			# (e.g. File Explorer Home), offscreen items report (0,0,0,0)
+			if viewport_rect:
+				if c_coords_unavailable:
+					viewport_filtered_count += 1
+					if depth < max_depth:
+						try:
+							for child in _safe_get_children(control):
+								queue.append((child, depth + 1, parent_candidate_idx))
+						except OverflowError:
+							pass
+					continue
+				vl, vt, vr, vb = viewport_rect
+				cx, cy = center
+				if cx < vl or cx > vr or cy < vt or cy > vb:
+					viewport_filtered_count += 1
+					if depth < max_depth:
+						try:
+							for child in _safe_get_children(control):
+								queue.append((child, depth + 1, parent_candidate_idx))
+						except OverflowError:
+							pass
+					continue
+
 			area = max(0, (right - left)) * max(0, (bottom - top))
+
+			# Read checked/selected state for applicable types
+			checked = None
+			selected = None
+			if ctrl_type in ("CheckBoxControl", "ButtonControl"):
+				# ButtonControl included: WinUI ToggleSwitch exposes as Button with TogglePattern
+				try:
+					pattern = control.GetTogglePattern()
+					if pattern:
+						checked = pattern.ToggleState != 0
+				except Exception:
+					pass
+			elif ctrl_type in ("RadioButtonControl", "ListItemControl", "TabItemControl"):
+				try:
+					pattern = control.GetSelectionItemPattern()
+					if pattern:
+						selected = pattern.IsSelected
+				except Exception:
+					pass
 
 			candidate = _Candidate(
 				control_type=ctrl_type,
@@ -414,6 +496,8 @@ def _walk_and_rank(
 				parent_idx=parent_candidate_idx,
 				area=area,
 				bfs_order=bfs_counter,
+				checked=checked,
+				selected=selected,
 			)
 			candidates.append(candidate)
 			my_idx = len(candidates) - 1
@@ -422,9 +506,17 @@ def _walk_and_rank(
 			if c_coords_unavailable:
 				coords_unavailable_count += 1
 
-		# Always descend into children
-		for child in _safe_get_children(control):
-			queue.append((child, depth + 1, my_idx))
+		# Early termination: enough candidates for scoring
+		if len(candidates) >= limit * 3:
+			break
+
+		# Descend into children (respecting depth limit)
+		if depth < max_depth:
+			try:
+				for child in _safe_get_children(control):
+					queue.append((child, depth + 1, my_idx))
+			except OverflowError:
+				continue  # Skip this subtree
 
 	# --- Pass 2: Score, rank, select top `limit` ---
 	total_candidates = len(candidates)
@@ -440,6 +532,9 @@ def _walk_and_rank(
 	idx_to_label: dict[int, str] = {}
 	for label_num, orig_idx in enumerate(selected_indices, start=1):
 		idx_to_label[orig_idx] = str(label_num)
+
+	# Recompute coords_unavailable from selected elements only (not full candidate set)
+	coords_unavailable_count = sum(1 for i in selected_indices if candidates[i].coords_unavailable)
 
 	# Resolve parent_label for each selected candidate
 	elements: dict[str, ElementInfo] = {}
@@ -468,9 +563,11 @@ def _walk_and_rank(
 			coords_unavailable=c.coords_unavailable,
 			parent_label=parent_label,
 			depth=c.depth,
+			checked=c.checked,
+			selected=c.selected,
 		)
 
-	return elements, ghost_filtered, coords_unavailable_count, capped, total_candidates
+	return elements, ghost_filtered, coords_unavailable_count, capped, total_candidates, viewport_filtered_count
 
 
 def _walk_tree(
@@ -724,6 +821,7 @@ def _build_metadata(
 	limit: int = 500,
 	total_candidates: int = 0,
 	scoring: bool = False,
+	viewport_filtered_count: int = 0,
 ) -> dict:
 	"""Build the metadata dict returned alongside elements."""
 	meta = {
@@ -731,9 +829,12 @@ def _build_metadata(
 		"detail": detail,
 		"window_scoped": window_name,
 		"coords_unavailable_count": coords_unavailable_count,
+		"coords_available_count": element_count - coords_unavailable_count,
 		"ghost_filtered_count": ghost_filtered_count,
 		"elapsed_seconds": round(elapsed, 3),
 	}
+	if viewport_filtered_count > 0:
+		meta["viewport_filtered_count"] = viewport_filtered_count
 	if scoring:
 		meta["scoring"] = True
 		if total_candidates > 0:
@@ -908,5 +1009,5 @@ def _safe_get_children(
 	try:
 		children = control.GetChildren()
 		return children if children else []
-	except Exception:
+	except Exception:  # Includes OverflowError from 64-bit handle reads
 		return []

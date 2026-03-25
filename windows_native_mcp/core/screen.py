@@ -26,8 +26,11 @@ except (AttributeError, OSError):
 def get_dpi_scale() -> float:
 	"""Get the DPI scale factor for the primary monitor."""
 	try:
-		# Set proper return type for 64-bit pointer safety
+		# 64-bit pointer safety for DC handles
+		ctypes.windll.user32.GetDC.argtypes = [ctypes.c_void_p]
 		ctypes.windll.user32.GetDC.restype = ctypes.c_void_p
+		ctypes.windll.gdi32.GetDeviceCaps.argtypes = [ctypes.c_void_p, ctypes.c_int]
+		ctypes.windll.user32.ReleaseDC.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
 		hdc = ctypes.windll.user32.GetDC(0)
 		dpi = ctypes.windll.gdi32.GetDeviceCaps(hdc, 88)  # LOGPIXELSX
 		ctypes.windll.user32.ReleaseDC(0, hdc)

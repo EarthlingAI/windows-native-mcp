@@ -41,6 +41,10 @@ def _build_tree_output(
 			node["coords_unavailable"] = True
 		if elem.automation_id:
 			node["automation_id"] = elem.automation_id
+		if elem.checked is not None:
+			node["checked"] = elem.checked
+		if elem.selected is not None:
+			node["selected"] = elem.selected
 		if include_rects and not elem.coords_unavailable:
 			node["rect"] = list(elem.bounding_rect)
 		nodes[label] = node
@@ -109,6 +113,10 @@ def register(mcp: FastMCP):
 			int,
 			Field(ge=1, le=5000, description="Max elements to return"),
 		] = 500,
+		viewport_only: Annotated[
+			bool,
+			Field(description="Exclude elements outside the visible viewport"),
+		] = True,
 	) -> list | dict:
 		"""Capture current desktop state: UI elements and optional annotated screenshot.
 
@@ -136,6 +144,7 @@ def register(mcp: FastMCP):
 			limit=limit,
 			type_filter=type_filter,
 			screen_size=screen_size,
+			viewport_only=viewport_only,
 		)
 
 		# Update shared state
