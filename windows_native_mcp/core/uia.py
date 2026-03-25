@@ -123,6 +123,8 @@ def get_desktop_elements(
 	total_candidates = 0
 
 	# Determine root control to walk
+	cache_used = False
+
 	root = _resolve_root(window_name)
 	if root is None:
 		elapsed = time.perf_counter() - start
@@ -149,7 +151,7 @@ def get_desktop_elements(
 			except Exception:
 				pass  # Fall back to no viewport filtering
 		try:
-			elements, ghost_filtered, coords_unavailable, capped, total_candidates, viewport_filtered = _walk_and_rank(
+			elements, ghost_filtered, coords_unavailable, capped, total_candidates, viewport_filtered, cache_used = _walk_and_rank(
 				root, scale_factor, limit=limit, type_filter=type_filter,
 				screen_size=screen_size, viewport_rect=viewport_rect,
 			)
@@ -171,6 +173,7 @@ def get_desktop_elements(
 		limit=limit, total_candidates=total_candidates,
 		scoring=scoring,
 		viewport_filtered_count=viewport_filtered,
+		cache_used=cache_used,
 	)
 	return elements, metadata
 
@@ -336,14 +339,14 @@ def _walk_and_rank(
 	screen_size: tuple[int, int] = (1920, 1080),
 	max_depth: int = 50,
 	viewport_rect: tuple[int, int, int, int] | None = None,
-) -> tuple[dict[str, ElementInfo], int, int, bool, int, int]:
+) -> tuple[dict[str, ElementInfo], int, int, bool, int, int, bool]:
 	"""Standard mode: two-pass BFS walk with scoring and ranking.
 
 	Pass 1: Full BFS collecting all interactive candidates (no cap).
 	Pass 2: Score, rank, take top `limit`, assign labels and parent_label.
 
 	Returns:
-		(elements, ghost_filtered_count, coords_unavailable_count, was_capped, total_candidates, viewport_filtered_count)
+		(elements, ghost_filtered_count, coords_unavailable_count, was_capped, total_candidates, viewport_filtered_count, cache_used)
 	"""
 	candidates: list[_Candidate] = []
 	ghost_filtered = 0
@@ -352,14 +355,44 @@ def _walk_and_rank(
 	bfs_counter = 0
 	explorer_tab_cache: dict[int, set[str] | None] = {}
 	interactive_types = type_filter if type_filter else INTERACTIVE_TYPES
+	cache_used = False
 
-	# --- Pass 1: Full BFS walk (no cap) ---
-	# Queue entries: (control, depth, parent_candidate_idx)
-	queue: deque[tuple[uiautomation.Control, int, int]] = deque()
-	for child in _safe_get_children(root):
-		queue.append((child, 0, -1))
+	# --- Fast path: CacheRequest-based walk (single COM roundtrip) ---
+	try:
+		from windows_native_mcp.core.cached_walk import collect_candidates as _cached_collect
+		result = _cached_collect(
+			root, interactive_types, viewport_rect,
+			scale_factor, max_depth=max_depth,
+			max_candidates=limit * 3,
+		)
+		if result is not None:
+			cached_candidates, ghost_filtered, coords_unavailable_count, viewport_filtered_count = result
+			# Convert cached_walk._Candidate to uia._Candidate (same fields)
+			for cc in cached_candidates:
+				candidates.append(_Candidate(
+					control_type=cc.control_type, name=cc.name,
+					automation_id=cc.automation_id, is_enabled=cc.is_enabled,
+					bounding_rect=cc.bounding_rect, center=cc.center,
+					coords_unavailable=cc.coords_unavailable, depth=cc.depth,
+					parent_idx=cc.parent_idx, area=cc.area,
+					bfs_order=cc.bfs_order, checked=cc.checked,
+					selected=cc.selected,
+				))
+			bfs_counter = len(candidates)
+			cache_used = True
+			logging.info(f"UIA: Cached walk collected {len(candidates)} candidates")
+	except Exception as e:
+		logging.info(f"UIA: Cached walk unavailable ({e}), using BFS")
 
-	while queue:
+	if not cache_used:
+		# --- Slow path: Pass 1 BFS walk (no cap) ---
+		# Queue entries: (control, depth, parent_candidate_idx)
+		queue: deque[tuple[uiautomation.Control, int, int]] = deque()
+		for child in _safe_get_children(root):
+			queue.append((child, 0, -1))
+
+	# BFS loop — only entered when cache_used is False
+	while not cache_used and queue:
 		control, depth, parent_candidate_idx = queue.popleft()
 
 		try:
@@ -519,8 +552,10 @@ def _walk_and_rank(
 				continue  # Skip this subtree
 
 	# --- Pass 2: Score, rank, select top `limit` ---
-	total_candidates = len(candidates)
-	capped = total_candidates > limit
+	# total_candidates = all interactive elements encountered (passed filters + viewport filtered)
+	# This makes the relationship clear: total_candidates - viewport_filtered_count = candidates passed
+	total_candidates = len(candidates) + viewport_filtered_count
+	capped = len(candidates) > limit
 
 	screen_w, screen_h = screen_size
 	scored = [(i, _score_candidate(c, screen_w, screen_h)) for i, c in enumerate(candidates)]
@@ -567,7 +602,7 @@ def _walk_and_rank(
 			selected=c.selected,
 		)
 
-	return elements, ghost_filtered, coords_unavailable_count, capped, total_candidates, viewport_filtered_count
+	return elements, ghost_filtered, coords_unavailable_count, capped, total_candidates, viewport_filtered_count, cache_used
 
 
 def _walk_tree(
@@ -822,6 +857,7 @@ def _build_metadata(
 	total_candidates: int = 0,
 	scoring: bool = False,
 	viewport_filtered_count: int = 0,
+	cache_used: bool = False,
 ) -> dict:
 	"""Build the metadata dict returned alongside elements."""
 	meta = {
@@ -833,6 +869,8 @@ def _build_metadata(
 		"ghost_filtered_count": ghost_filtered_count,
 		"elapsed_seconds": round(elapsed, 3),
 	}
+	if cache_used:
+		meta["cache_used"] = True
 	if viewport_filtered_count > 0:
 		meta["viewport_filtered_count"] = viewport_filtered_count
 	if scoring:

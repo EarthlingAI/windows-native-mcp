@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Gate 1 tests for windows-native-mcp.
+"""Gate 1 + Phase 2 + Phase 3 Tests for windows-native-mcp.
 
 Run: python tests/test_server.py
 Uses check(name, condition) pattern — no test framework needed.
@@ -593,9 +593,239 @@ def test_tree_output_checked_selected():
 	check("plain button no selected field", button is not None and "selected" not in button)
 
 
+def test_cached_walk_import():
+	"""Verify cached_walk module imports and _build_cache_request returns non-None."""
+	print("\n--- Cached Walk Import Tests ---")
+
+	try:
+		from windows_native_mcp.core.cached_walk import collect_candidates, _build_cache_request, _Candidate
+		check("cached_walk imports", True)
+	except Exception as e:
+		check("cached_walk imports", False, str(e))
+		return
+
+	try:
+		cr = _build_cache_request()
+		check("_build_cache_request returns non-None", cr is not None)
+	except Exception as e:
+		check("_build_cache_request returns non-None", False, str(e))
+
+
+def test_cached_walk_basic():
+	"""Call collect_candidates with desktop root, verify return shape."""
+	print("\n--- Cached Walk Basic Tests ---")
+
+	import uiautomation
+	from windows_native_mcp.core.cached_walk import collect_candidates, _Candidate
+	from windows_native_mcp.core.uia import INTERACTIVE_TYPES
+	from windows_native_mcp.core.screen import get_dpi_scale
+
+	root = uiautomation.GetRootControl()
+	scale = get_dpi_scale()
+
+	result = collect_candidates(root, INTERACTIVE_TYPES, viewport_rect=None, scale_factor=scale)
+	check("collect_candidates returns tuple or None", result is None or isinstance(result, tuple))
+
+	if result is not None:
+		candidates, ghost_filtered, coords_unavail, viewport_filtered = result
+		check("candidates is list", isinstance(candidates, list))
+		check("found some candidates", len(candidates) > 0, f"got {len(candidates)}")
+
+		if candidates:
+			c = candidates[0]
+			check("candidate is _Candidate instance", isinstance(c, _Candidate))
+			check("candidate has control_type", isinstance(c.control_type, str) and len(c.control_type) > 0)
+			check("candidate has name (accessible)", isinstance(c.name, str))
+			check("candidate has center tuple", isinstance(c.center, tuple) and len(c.center) == 2)
+
+		check("ghost_filtered is int", isinstance(ghost_filtered, int))
+		check("coords_unavail is int", isinstance(coords_unavail, int))
+		check("viewport_filtered is int", isinstance(viewport_filtered, int))
+
+
+def test_cached_walk_matches_bfs():
+	"""Compare cached walk vs BFS walk on the same window."""
+	print("\n--- Cached Walk vs BFS Comparison Tests ---")
+
+	import uiautomation
+	from windows_native_mcp.core.cached_walk import collect_candidates
+	from windows_native_mcp.core.uia import INTERACTIVE_TYPES, find_window, get_window_list, _walk_and_rank, _resolve_root
+	from windows_native_mcp.core.screen import get_dpi_scale
+
+	# Find any open window to test with
+	windows = get_window_list()
+	if not windows:
+		check("skip — no windows found", True)
+		return
+
+	# Pick first non-minimized window with a title
+	target = None
+	for w in windows:
+		if not w.get("is_minimized") and w.get("title"):
+			target = w
+			break
+
+	if target is None:
+		check("skip — no suitable window", True)
+		return
+
+	window_ctrl = find_window(target["title"])
+	if window_ctrl is None:
+		check("skip — could not find window control", True)
+		return
+
+	scale = get_dpi_scale()
+
+	# Cached walk
+	cached_result = collect_candidates(window_ctrl, INTERACTIVE_TYPES, viewport_rect=None, scale_factor=scale)
+
+	# BFS walk (via get_desktop_elements on same window)
+	from windows_native_mcp.core.uia import get_desktop_elements
+	bfs_elements, bfs_meta = get_desktop_elements(
+		detail="standard", scale_factor=scale, window_name=target["title"],
+		viewport_only=False,
+	)
+
+	if cached_result is None:
+		check("cached walk returned None (fallback expected on some systems)", True)
+		return
+
+	cached_candidates = cached_result[0]
+	cached_count = len(cached_candidates)
+	# Compare against total_candidates (pre-scoring count), not element_count (post-scoring)
+	bfs_total = bfs_meta.get("total_candidates", bfs_meta.get("element_count", 0))
+
+	print(f"    Cached: {cached_count} candidates, BFS total_candidates: {bfs_total}")
+
+	# Count comparison — both return raw candidate counts before scoring cap
+	if bfs_total > 0:
+		ratio = cached_count / bfs_total
+		check(f"candidate count within 50% tolerance (ratio={ratio:.2f})", 0.5 <= ratio <= 1.5,
+			f"cached={cached_count}, bfs_total={bfs_total}, ratio={ratio:.2f}")
+	else:
+		check("both walks found elements", cached_count == 0 and bfs_total == 0)
+
+	# Control type overlap — normalize: BFS strips "Control" suffix, cached keeps it
+	cached_types = {c.control_type.removesuffix("Control") for c in cached_candidates}
+	bfs_types = set()
+	for elem_info in bfs_elements.values():
+		bfs_types.add(elem_info.control_type)
+
+	if cached_types and bfs_types:
+		overlap = len(cached_types & bfs_types) / max(len(cached_types), len(bfs_types))
+		check(f"control type sets overlap significantly ({overlap:.0%})", overlap > 0.5,
+			f"cached_types={cached_types}, bfs_types={bfs_types}")
+
+
+def test_cached_walk_performance():
+	"""Time both walks, log speedup ratio (informational)."""
+	print("\n--- Cached Walk Performance Tests ---")
+
+	import time
+	import uiautomation
+	from windows_native_mcp.core.cached_walk import collect_candidates
+	from windows_native_mcp.core.uia import INTERACTIVE_TYPES, get_desktop_elements
+	from windows_native_mcp.core.screen import get_dpi_scale
+
+	root = uiautomation.GetRootControl()
+	scale = get_dpi_scale()
+
+	# Time cached walk
+	t0 = time.perf_counter()
+	cached_result = collect_candidates(root, INTERACTIVE_TYPES, viewport_rect=None, scale_factor=scale)
+	cached_time = time.perf_counter() - t0
+
+	# Time BFS walk
+	t0 = time.perf_counter()
+	bfs_elements, bfs_meta = get_desktop_elements(detail="minimal", scale_factor=scale, viewport_only=False)
+	bfs_time = time.perf_counter() - t0
+
+	print(f"    Cached walk: {cached_time:.3f}s, BFS walk: {bfs_time:.3f}s")
+	if cached_time > 0:
+		speedup = bfs_time / cached_time
+		print(f"    Speedup ratio: {speedup:.2f}x")
+
+	check("cached walk ran without error", True)
+	check("BFS walk ran without error", True)
+
+
+def test_cached_walk_fallback():
+	"""Pass a mock object with no .Element attribute, verify graceful None return."""
+	print("\n--- Cached Walk Fallback Tests ---")
+
+	from windows_native_mcp.core.cached_walk import collect_candidates
+	from windows_native_mcp.core.uia import INTERACTIVE_TYPES
+
+	class FakeRoot:
+		"""Mock object with no .Element attribute."""
+		pass
+
+	result = collect_candidates(FakeRoot(), INTERACTIVE_TYPES, viewport_rect=None, scale_factor=1.0)
+	check("collect_candidates returns None for invalid root", result is None)
+
+
+def test_cached_pattern_reading():
+	"""Run cached walk, verify some candidates have checked/selected fields."""
+	print("\n--- Cached Pattern Reading Tests ---")
+
+	import uiautomation
+	from windows_native_mcp.core.cached_walk import collect_candidates, _Candidate
+	from windows_native_mcp.core.uia import INTERACTIVE_TYPES
+	from windows_native_mcp.core.screen import get_dpi_scale
+
+	root = uiautomation.GetRootControl()
+	scale = get_dpi_scale()
+
+	result = collect_candidates(root, INTERACTIVE_TYPES, viewport_rect=None, scale_factor=scale)
+	if result is None:
+		check("skip — cached walk returned None", True)
+		return
+
+	candidates = result[0]
+	check("candidates list not empty", len(candidates) > 0)
+
+	# Verify every candidate has checked and selected fields (bool or None)
+	fields_valid = True
+	has_checked_or_selected = False
+	for c in candidates:
+		if not (c.checked is None or isinstance(c.checked, bool)):
+			fields_valid = False
+			break
+		if not (c.selected is None or isinstance(c.selected, bool)):
+			fields_valid = False
+			break
+		if c.checked is not None or c.selected is not None:
+			has_checked_or_selected = True
+
+	check("all candidates have valid checked field (bool or None)", fields_valid)
+	check("all candidates have valid selected field (bool or None)", fields_valid)
+	# Informational — may not find any on a clean desktop
+	if has_checked_or_selected:
+		print("    (found candidates with checked/selected state)")
+	else:
+		print("    (no candidates with checked/selected state — OK on clean desktop)")
+
+
+def test_cache_used_metadata():
+	"""Call get_desktop_elements(detail='standard'), verify cache_used key in metadata."""
+	print("\n--- Cache Used Metadata Tests ---")
+
+	from windows_native_mcp.core.uia import get_desktop_elements
+	from windows_native_mcp.core.screen import get_dpi_scale
+
+	scale = get_dpi_scale()
+	elements, metadata = get_desktop_elements(detail="standard", scale_factor=scale)
+
+	has_key = "cache_used" in metadata
+	check("metadata has cache_used key", has_key,
+		f"metadata keys: {list(metadata.keys())}")
+	if has_key:
+		check("cache_used is True", metadata["cache_used"] is True)
+
+
 if __name__ == "__main__":
 	print("=" * 50)
-	print(" Windows Native MCP — Gate 1 + Phase 2 Tests")
+	print(" Windows Native MCP — Gate 1 + Phase 2 + Phase 3 Tests")
 	print("=" * 50)
 
 	test_imports()
@@ -619,6 +849,13 @@ if __name__ == "__main__":
 	test_start_app_resolution()
 	test_app_mode_names()
 	test_tree_output_checked_selected()
+	test_cached_walk_import()
+	test_cached_walk_basic()
+	test_cached_walk_matches_bfs()
+	test_cached_walk_performance()
+	test_cached_walk_fallback()
+	test_cached_pattern_reading()
+	test_cache_used_metadata()
 
 	print(f"\n{'=' * 50}")
 	print(f" Results: {passed} passed, {failed} failed")

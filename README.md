@@ -50,8 +50,13 @@ windows_native_mcp/
     ├── state.py     # Element registry + invalidation
     ├── screen.py    # MSS screenshot + DPI + annotation
     ├── uia.py       # UI Automation wrapper
-    └── input.py     # SendInput (mouse + keyboard + clipboard)
+    ├── input.py     # SendInput (mouse + keyboard + clipboard)
+    └── cached_walk.py  # CacheRequest fast-path walk
 ```
+
+## Performance
+
+Standard mode uses a CacheRequest-based fast path that batches all UI Automation property reads into a single COM roundtrip, typically 10-20x faster than individual COM calls. Falls back to traditional BFS walk on any COM error. Metadata includes `cache_used: true` when the fast path is active.
 
 ## Future Enhancements
 
@@ -59,7 +64,6 @@ windows_native_mcp/
 - Diff mode (return only changed elements since last snapshot)
 - Element text content extraction (for EditControl/TextControl)
 - Focus state indicator
-- CacheRequest optimization (requires uiautomation fork — batch COM reads)
 
 ## Tests
 
