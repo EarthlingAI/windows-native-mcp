@@ -13,6 +13,7 @@ from windows_native_mcp.core.input import (
 	type_text_sendinput,
 	paste_text,
 	key_combo,
+	focus_window_if_needed,
 )
 
 
@@ -50,6 +51,10 @@ def register(mcp: FastMCP):
 			Literal["type", "paste", "auto"],
 			Field(description="Input method: type (SendInput), paste (clipboard), auto (paste if >20 chars)"),
 		] = "auto",
+		window: Annotated[
+			str | None,
+			Field(description="Window to focus before action (default: window from last snapshot)"),
+		] = None,
 	) -> dict:
 		"""Type text into the focused element or a specified target.
 
@@ -58,6 +63,9 @@ def register(mcp: FastMCP):
 		special chars (*, @, #, etc.) and Unicode.
 		"""
 		scale = desktop_state.scale_factor
+
+		# Bring target window to foreground before sending input
+		focus_window_if_needed(desktop_state, window)
 
 		# Click target to focus it
 		if target is not None:

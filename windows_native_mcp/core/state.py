@@ -30,6 +30,8 @@ class DesktopState:
 	scale_factor: float = 1.0
 	screen_size: tuple[int, int] = (1920, 1080)
 	is_stale: bool = True
+	window_name: str | None = None      # Window name from last scoped snapshot
+	window_handle: int | None = None     # HWND from last scoped snapshot
 
 	def resolve_target(self, target: str | list[int]) -> tuple[int, int]:
 		"""Resolve a target (label string or [x, y] list) to logical pixel coordinates.

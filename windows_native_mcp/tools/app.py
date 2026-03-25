@@ -18,6 +18,7 @@ from pydantic import Field
 from windows_native_mcp.core.state import desktop_state
 from windows_native_mcp.core.uia import get_window_list, find_window
 from windows_native_mcp.core.screen import get_screen_size
+from windows_native_mcp.core.input import ensure_foreground
 
 user32 = ctypes.windll.user32
 kernel32 = ctypes.windll.kernel32
@@ -96,33 +97,7 @@ def _is_minimized(hwnd: int) -> bool:
 
 def _switch_to_window(hwnd: int):
 	"""Bring a window to the foreground using Win11-compatible approach."""
-	# Restore if minimized
-	if _is_minimized(hwnd):
-		user32.ShowWindow(hwnd, SW_RESTORE)
-		time.sleep(0.1)
-
-	# AttachThreadInput trick for Win11's SetForegroundWindow restrictions
-	foreground = user32.GetForegroundWindow()
-	target_tid = user32.GetWindowThreadProcessId(hwnd, None)
-	current_tid = kernel32.GetCurrentThreadId()
-
-	if foreground != hwnd:
-		fg_tid = user32.GetWindowThreadProcessId(foreground, None)
-		# Attach to foreground thread to inherit its foreground rights
-		user32.AttachThreadInput(current_tid, fg_tid, True)
-		try:
-			user32.BringWindowToTop(hwnd)
-			user32.SetForegroundWindow(hwnd)
-		finally:
-			user32.AttachThreadInput(current_tid, fg_tid, False)
-
-	# Verify
-	time.sleep(0.1)
-	actual_fg = user32.GetForegroundWindow()
-	if actual_fg != hwnd:
-		# Fallback: ShowWindow + SetForegroundWindow
-		user32.ShowWindow(hwnd, SW_SHOW)
-		user32.SetForegroundWindow(hwnd)
+	ensure_foreground(hwnd)
 
 
 def _calculate_preset_rect(preset: str, screen_w: int, screen_h: int) -> tuple[int, int, int, int]:
@@ -458,7 +433,16 @@ def register(mcp: FastMCP):
 			return {"closed": title.value, "handle": hwnd}
 
 		if mode == "restore":
-			hwnd = _find_window_handle(name, handle)
+			# Prefer the minimized window among name matches
+			if name and handle is None:
+				windows = get_window_list()
+				minimized = [w for w in windows if name.lower() in w["title"].lower() and w["is_minimized"]]
+				if minimized:
+					hwnd = minimized[0]["handle"]
+				else:
+					hwnd = _find_window_handle(name, handle)
+			else:
+				hwnd = _find_window_handle(name, handle)
 
 			title = ctypes.create_unicode_buffer(256)
 			user32.GetWindowTextW(hwnd, title, 256)

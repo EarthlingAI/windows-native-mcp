@@ -133,6 +133,14 @@ def get_desktop_elements(
 			0, detail, window_name, 0, 0, capped=False, elapsed=elapsed,
 		)
 
+	# Capture window handle for scoped snapshots (used for auto-foreground)
+	window_handle = None
+	window_minimized = False
+	if window_name:
+		window_handle = _get_native_handle(root)
+		if window_handle:
+			window_minimized = _is_window_minimized(window_handle)
+
 	if detail == "minimal":
 		elements, ghost_filtered, coords_unavailable = _collect_minimal(
 			root, window_name, scale_factor,
@@ -174,6 +182,8 @@ def get_desktop_elements(
 		scoring=scoring,
 		viewport_filtered_count=viewport_filtered,
 		cache_used=cache_used,
+		window_handle=window_handle,
+		window_minimized=window_minimized,
 	)
 	return elements, metadata
 
@@ -667,6 +677,21 @@ def _walk_tree(
 				info.control_type = ctrl_type.removesuffix("Control")
 				info.parent_label = parent_label
 				info.depth = depth
+				# Add checked/selected state for applicable types
+				if ctrl_type in ("CheckBoxControl", "ButtonControl"):
+					try:
+						pattern = control.GetTogglePattern()
+						if pattern:
+							info.checked = pattern.ToggleState != 0
+					except Exception:
+						pass
+				elif ctrl_type in ("RadioButtonControl", "ListItemControl", "TabItemControl"):
+					try:
+						pattern = control.GetSelectionItemPattern()
+						if pattern:
+							info.selected = pattern.IsSelected
+					except Exception:
+						pass
 				elements[info.label] = info
 				current_label = info.label
 				if is_coords_unavail:
@@ -858,6 +883,8 @@ def _build_metadata(
 	scoring: bool = False,
 	viewport_filtered_count: int = 0,
 	cache_used: bool = False,
+	window_handle: int | None = None,
+	window_minimized: bool = False,
 ) -> dict:
 	"""Build the metadata dict returned alongside elements."""
 	meta = {
@@ -871,6 +898,10 @@ def _build_metadata(
 	}
 	if cache_used:
 		meta["cache_used"] = True
+	if window_handle:
+		meta["window_handle"] = window_handle
+	if window_minimized:
+		meta["window_minimized"] = True
 	if viewport_filtered_count > 0:
 		meta["viewport_filtered_count"] = viewport_filtered_count
 	if scoring:
@@ -883,6 +914,15 @@ def _build_metadata(
 			f"Element limit ({limit}) reached. "
 			"Scope to a specific window for complete results."
 		)
+	# Diagnostic note when all elements were filtered out
+	if element_count == 0 and total_candidates > 0 and not capped:
+		if viewport_filtered_count == total_candidates:
+			meta["note"] = (
+				"All interactive elements were outside the viewport. "
+				"The window may be minimized or obscured."
+			)
+		else:
+			meta["note"] = "All candidates were filtered during scoring."
 	return meta
 
 

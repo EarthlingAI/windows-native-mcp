@@ -9,7 +9,7 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from windows_native_mcp.core.state import desktop_state
-from windows_native_mcp.core.input import mouse_click, mouse_move, mouse_drag
+from windows_native_mcp.core.input import mouse_click, mouse_move, mouse_drag, focus_window_if_needed
 
 
 def register(mcp: FastMCP):
@@ -46,6 +46,10 @@ def register(mcp: FastMCP):
 			list[str] | None,
 			Field(description='Keys to hold during click (e.g. ["ctrl"], ["shift"])'),
 		] = None,
+		window: Annotated[
+			str | None,
+			Field(description="Window to focus before action (default: window from last snapshot)"),
+		] = None,
 	) -> dict:
 		"""Click, double-click, right-click, hover, or drag at a target.
 
@@ -55,6 +59,9 @@ def register(mcp: FastMCP):
 		"""
 		x, y = desktop_state.resolve_target(target)
 		scale = desktop_state.scale_factor
+
+		# Bring target window to foreground before sending input
+		focus_window_if_needed(desktop_state, window)
 
 		# Hold modifiers if specified
 		if modifiers:

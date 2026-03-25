@@ -227,6 +227,13 @@ def collect_candidates(
 		# Get raw COM element from uiautomation Control
 		root_element = root.Element
 
+		# Force fresh COM reference to avoid potential UIA element-level caching
+		iua = _get_iua()
+		condition = iua.CreateTrueCondition()
+		fresh = root_element.FindFirst(1, condition)  # TreeScope_Element = 1
+		if fresh is not None:
+			root_element = fresh
+
 		# Build and execute CacheRequest — single COM roundtrip
 		cache_request = _build_cache_request()
 		cached_root = root_element.BuildUpdatedCache(cache_request)

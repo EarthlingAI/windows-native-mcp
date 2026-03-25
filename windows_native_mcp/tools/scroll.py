@@ -7,7 +7,7 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from windows_native_mcp.core.state import desktop_state
-from windows_native_mcp.core.input import mouse_scroll
+from windows_native_mcp.core.input import mouse_scroll, focus_window_if_needed
 
 
 def register(mcp: FastMCP):
@@ -36,6 +36,10 @@ def register(mcp: FastMCP):
 			int,
 			Field(ge=1, le=20, description="Number of scroll wheel clicks"),
 		] = 3,
+		window: Annotated[
+			str | None,
+			Field(description="Window to focus before action (default: window from last snapshot)"),
+		] = None,
 	) -> dict:
 		"""Scroll at a target location or screen center.
 
@@ -43,6 +47,9 @@ def register(mcp: FastMCP):
 		to refresh before the next interaction.
 		"""
 		scale = desktop_state.scale_factor
+
+		# Bring target window to foreground before sending input
+		focus_window_if_needed(desktop_state, window)
 
 		if target is not None:
 			x, y = desktop_state.resolve_target(target)

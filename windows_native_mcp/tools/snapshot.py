@@ -152,6 +152,8 @@ def register(mcp: FastMCP):
 		desktop_state.scale_factor = scale_factor
 		desktop_state.screen_size = screen_size
 		desktop_state.is_stale = False
+		desktop_state.window_name = window
+		desktop_state.window_handle = metadata.get("window_handle")
 
 		metadata["scale_factor"] = scale_factor
 		metadata["screen_size"] = list(screen_size)

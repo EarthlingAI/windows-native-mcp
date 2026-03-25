@@ -6,10 +6,10 @@ MCP server for Windows 11+ desktop automation. Provides 6 tools for screenshot c
 
 | Tool | Purpose |
 |------|---------|
-| `snapshot` | Screenshot + hierarchical UI tree + scored element labels + viewport filtering |
-| `click` | Mouse click/hover/drag via SendInput |
-| `type_text` | Text input via SendInput or clipboard paste |
-| `scroll` | Mouse wheel via SendInput |
+| `snapshot` | Screenshot + hierarchical UI tree + scored element labels + viewport filtering. `detail: "full"` includes `checked`/`selected` fields. Window-scoped snapshots store the window handle for auto-foreground |
+| `click` | Mouse click/hover/drag via SendInput. Optional `window` param to focus a specific window before action. Auto-focuses window from last scoped snapshot |
+| `type_text` | Text input via SendInput or clipboard paste. Optional `window` param for auto-foreground |
+| `scroll` | Mouse wheel via SendInput. Optional `window` param for auto-foreground |
 | `shortcut` | Keyboard combos via SendInput |
 | `app` | Window launch (incl. UWP)/switch/resize/close/list-open/list-installed/restore |
 

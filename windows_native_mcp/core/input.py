@@ -565,3 +565,128 @@ def paste_text(text: str) -> None:
 	time.sleep(0.1)  # Wait for target app to process the paste
 
 	logging.info("Pasted %d characters via clipboard", len(text))
+
+
+# --- Window Foreground Management ---
+
+# Win32 constants for window management
+SW_RESTORE = 9
+SW_SHOW = 5
+
+# 64-bit pointer safety for window management functions
+ctypes.windll.user32.IsIconic.argtypes = [ctypes.c_void_p]
+ctypes.windll.user32.IsIconic.restype = ctypes.c_int
+ctypes.windll.user32.GetForegroundWindow.restype = ctypes.c_void_p
+ctypes.windll.user32.SetForegroundWindow.argtypes = [ctypes.c_void_p]
+ctypes.windll.user32.BringWindowToTop.argtypes = [ctypes.c_void_p]
+ctypes.windll.user32.ShowWindow.argtypes = [ctypes.c_void_p, ctypes.c_int]
+ctypes.windll.user32.GetWindowThreadProcessId.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.wintypes.DWORD)]
+ctypes.windll.user32.AttachThreadInput.argtypes = [ctypes.wintypes.DWORD, ctypes.wintypes.DWORD, ctypes.wintypes.BOOL]
+ctypes.windll.user32.FindWindowW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p]
+ctypes.windll.user32.FindWindowW.restype = ctypes.c_void_p
+ctypes.windll.user32.IsWindow.argtypes = [ctypes.c_void_p]
+ctypes.windll.user32.GetWindowTextW.argtypes = [ctypes.c_void_p, ctypes.c_wchar_p, ctypes.c_int]
+ctypes.windll.user32.EnumWindows.argtypes = [ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.c_void_p, ctypes.wintypes.LPARAM), ctypes.wintypes.LPARAM]
+
+_user32 = ctypes.windll.user32
+_kernel32 = ctypes.windll.kernel32
+
+
+def _is_minimized(hwnd: int) -> bool:
+	"""Check if a window is minimized."""
+	try:
+		return bool(_user32.IsIconic(hwnd))
+	except (AttributeError, OSError, OverflowError):
+		return False
+
+
+def ensure_foreground(hwnd: int) -> bool:
+	"""Bring a window to the foreground using Win11-compatible approach.
+
+	Returns True if the window is now foreground.
+	"""
+	if not hwnd:
+		return False
+
+	# Restore if minimized
+	if _is_minimized(hwnd):
+		_user32.ShowWindow(hwnd, SW_RESTORE)
+		time.sleep(0.1)
+
+	# AttachThreadInput trick for Win11's SetForegroundWindow restrictions
+	foreground = _user32.GetForegroundWindow()
+	current_tid = _kernel32.GetCurrentThreadId()
+
+	if foreground != hwnd:
+		fg_tid = _user32.GetWindowThreadProcessId(foreground, None)
+		# Attach to foreground thread to inherit its foreground rights
+		_user32.AttachThreadInput(current_tid, fg_tid, True)
+		try:
+			_user32.BringWindowToTop(hwnd)
+			_user32.SetForegroundWindow(hwnd)
+		finally:
+			_user32.AttachThreadInput(current_tid, fg_tid, False)
+
+	# Verify
+	time.sleep(0.1)
+	actual_fg = _user32.GetForegroundWindow()
+	if actual_fg != hwnd:
+		# Fallback: ShowWindow + SetForegroundWindow
+		_user32.ShowWindow(hwnd, SW_SHOW)
+		_user32.SetForegroundWindow(hwnd)
+		time.sleep(0.05)
+		actual_fg = _user32.GetForegroundWindow()
+
+	return actual_fg == hwnd
+
+
+def _find_hwnd_by_name(name: str) -> int | None:
+	"""Find a window handle by name. Exact match first, then substring."""
+	if not name:
+		return None
+
+	# Exact match via FindWindowW
+	hwnd = _user32.FindWindowW(None, name)
+	if hwnd:
+		return hwnd
+
+	# Substring match via EnumWindows
+	result = [None]
+	name_lower = name.lower()
+
+	@ctypes.WINFUNCTYPE(ctypes.wintypes.BOOL, ctypes.c_void_p, ctypes.wintypes.LPARAM)
+	def _enum_callback(hwnd, lparam):
+		try:
+			if not _user32.IsWindow(hwnd):
+				return True
+			buf = ctypes.create_unicode_buffer(256)
+			_user32.GetWindowTextW(hwnd, buf, 256)
+			title = buf.value
+			if title and name_lower in title.lower():
+				result[0] = hwnd
+				return False  # Stop enumeration
+		except Exception:
+			pass
+		return True
+
+	_user32.EnumWindows(_enum_callback, 0)
+	return result[0]
+
+
+def focus_window_if_needed(desktop_state, window: str | None = None) -> None:
+	"""Bring the target window to foreground before sending input.
+
+	Args:
+		desktop_state: Current desktop state (reads stored window_handle/name).
+		window: Explicit window name override. None = use stored window from last snapshot.
+	"""
+	if window is not None:
+		# Explicit window — resolve handle by name
+		hwnd = _find_hwnd_by_name(window)
+		if hwnd:
+			ensure_foreground(hwnd)
+		return
+
+	# Auto-focus from stored snapshot window
+	if desktop_state.window_handle:
+		ensure_foreground(desktop_state.window_handle)
