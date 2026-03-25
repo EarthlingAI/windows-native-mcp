@@ -54,8 +54,10 @@ def register(mcp: FastMCP):
 		"""Click, double-click, right-click, hover, or drag at a target.
 
 		Use element labels from a recent snapshot for precise targeting.
-		Labels are invalidated after this action — call snapshot again to
-		get fresh labels before the next interaction.
+		Labels are invalidated after this action — re-snapshot before
+		the next interaction. Auto-focuses the window from the last
+		scoped snapshot. For desktop-wide snapshots, pass window to
+		focus a specific window first.
 		"""
 		x, y = desktop_state.resolve_target(target)
 		scale = desktop_state.scale_factor

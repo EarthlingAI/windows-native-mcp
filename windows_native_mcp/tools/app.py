@@ -253,9 +253,11 @@ def register(mcp: FastMCP):
 	) -> dict | list:
 		"""Manage application windows: launch, switch focus, resize, close, list, or restore.
 
-		Use 'list-open' to get open window handles for reliable targeting.
-		Use 'list-installed' to discover launchable apps from the Start Menu.
-		For switch mode, handle-based targeting is more reliable than name.
+		Use list-open to discover window handles for reliable targeting.
+		Use list-installed to discover launchable apps from the Start Menu.
+		Prefer handle over name for switch/resize/close/restore.
+		Window matching uses exact then substring — not fuzzy.
+		If launch returns handle: null, use list-open after a few seconds.
 		"""
 		if mode == "list-open":
 			windows = get_window_list()

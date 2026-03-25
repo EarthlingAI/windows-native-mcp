@@ -49,7 +49,7 @@ def register(mcp: FastMCP):
 		] = False,
 		method: Annotated[
 			Literal["type", "paste", "auto"],
-			Field(description="Input method: type (SendInput), paste (clipboard), auto (paste if >20 chars)"),
+			Field(description="Input method: type (SendInput, preserves clipboard), paste (clipboard, overwrites contents), auto (paste if >20 chars)"),
 		] = "auto",
 		window: Annotated[
 			str | None,
@@ -58,9 +58,9 @@ def register(mcp: FastMCP):
 	) -> dict:
 		"""Type text into the focused element or a specified target.
 
-		Auto mode uses clipboard paste for text >20 characters (near-instant)
-		and SendInput for shorter text. Handles all characters including
-		special chars (*, @, #, etc.) and Unicode.
+		Auto mode uses clipboard paste for text >20 chars (overwrites clipboard)
+		and SendInput for shorter text. Use method='type' to preserve clipboard.
+		Auto-focuses the window from the last scoped snapshot.
 		"""
 		scale = desktop_state.scale_factor
 

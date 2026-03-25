@@ -28,7 +28,7 @@ def register(mcp: FastMCP):
 			str,
 			Field(
 				min_length=1,
-				description='Key combination (e.g. "ctrl+s", "ctrl+shift+s", "alt+f4", "win+d", "enter", "tab")',
+				description="Lowercase key combo using + separator. Modifiers: ctrl, shift, alt, win. Named keys: enter, tab, escape, backspace, delete, space, up, down, left, right, home, end, pageup, pagedown, f1-f12",
 			),
 		],
 	) -> dict:

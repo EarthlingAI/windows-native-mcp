@@ -43,8 +43,9 @@ def register(mcp: FastMCP):
 	) -> dict:
 		"""Scroll at a target location or screen center.
 
-		Element labels are invalidated after scrolling — call snapshot
-		to refresh before the next interaction.
+		Labels are invalidated after scrolling — re-snapshot before
+		the next interaction. Auto-focuses the window from the last
+		scoped snapshot.
 		"""
 		scale = desktop_state.scale_factor
 

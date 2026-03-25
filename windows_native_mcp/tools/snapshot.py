@@ -111,7 +111,7 @@ def register(mcp: FastMCP):
 		] = None,
 		limit: Annotated[
 			int,
-			Field(ge=1, le=5000, description="Max elements to return"),
+			Field(ge=1, le=5000, description="Max elements to return (ranked by visibility and relevance). Increase if important elements are missing"),
 		] = 500,
 		viewport_only: Annotated[
 			bool,
@@ -120,13 +120,13 @@ def register(mcp: FastMCP):
 	) -> list | dict:
 		"""Capture current desktop state: UI elements and optional annotated screenshot.
 
-		Returns numbered element labels that can be used as targets for click,
-		type_text, scroll, and other action tools. Always call this before
-		interacting with the UI. Element labels are invalidated after any action.
+		Returns numbered element labels for use as targets in click, type_text,
+		scroll, and other action tools. Labels are invalidated after any action —
+		always re-snapshot before the next interaction.
 
-		With screenshot=True (default), returns an annotated image showing
-		numbered labels on interactive elements, plus a JSON summary.
-		With screenshot=False, returns just the element data as a dict.
+		Elements marked coords_unavailable (common in UWP apps) cannot use label
+		targeting — use [x, y] coordinates from the screenshot instead.
+		Screenshot captures the primary monitor only.
 		"""
 		scale_factor = get_dpi_scale()
 		screen_size = get_screen_size()
