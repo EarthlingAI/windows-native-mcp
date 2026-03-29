@@ -15,6 +15,8 @@ from windows_native_mcp.core.screen import (
 	screenshot_to_bytes,
 	get_dpi_scale,
 	get_screen_size,
+	get_window_rect,
+	crop_to_rect,
 )
 from windows_native_mcp.core.uia import get_desktop_elements
 
@@ -99,8 +101,8 @@ def register(mcp: FastMCP):
 		] = None,
 		screenshot: Annotated[
 			bool,
-			Field(description="Include annotated screenshot image"),
-		] = True,
+			Field(description="Include annotated screenshot image. Off by default — enable when UI tree labels aren't sufficient, elements show coords_unavailable, or you need visual verification"),
+		] = False,
 		include_rects: Annotated[
 			bool,
 			Field(description="Include bounding rectangles in output"),
@@ -118,15 +120,21 @@ def register(mcp: FastMCP):
 			Field(description="Exclude elements outside the visible viewport"),
 		] = True,
 	) -> list | dict:
-		"""Capture current desktop state: UI elements and optional annotated screenshot.
+		"""Capture current desktop state as a UI element tree with numbered labels.
 
 		Returns numbered element labels for use as targets in click, type_text,
 		scroll, and other action tools. Labels are invalidated after any action —
 		always re-snapshot before the next interaction.
 
+		Screenshot is off by default — the UI tree alone is sufficient for most
+		interactions. Enable screenshot=True when labels aren't giving enough
+		context, elements show coords_unavailable, or you need to verify visual
+		layout.
+
 		Elements marked coords_unavailable (common in UWP apps) cannot use label
 		targeting — use [x, y] coordinates from the screenshot instead.
-		Screenshot captures the primary monitor only.
+		When window-scoped, screenshot is auto-cropped to the window bounds.
+		Otherwise, screenshot captures the primary monitor.
 		"""
 		scale_factor = get_dpi_scale()
 		screen_size = get_screen_size()
@@ -170,6 +178,14 @@ def register(mcp: FastMCP):
 		# Capture and annotate screenshot
 		img = capture_screenshot()
 		annotated = annotate_screenshot(img, elements, scale_factor)
+
+		# Crop to window bounds if window-scoped and not minimized
+		window_handle = metadata.get("window_handle")
+		if window_handle and not metadata.get("window_minimized"):
+			win_rect = get_window_rect(window_handle)
+			if win_rect:
+				annotated = crop_to_rect(annotated, win_rect)
+
 		png_bytes = screenshot_to_bytes(annotated)
 
 		text_content = json.dumps({

@@ -49,6 +49,41 @@ def get_screen_size() -> tuple[int, int]:
 		return (1920, 1080)
 
 
+def get_window_rect(handle: int) -> tuple[int, int, int, int] | None:
+	"""Get window bounding rect in physical pixels via Win32 GetWindowRect.
+
+	Returns (left, top, right, bottom) or None if the call fails.
+	"""
+	try:
+		rect = ctypes.wintypes.RECT()
+		if ctypes.windll.user32.GetWindowRect(handle, ctypes.byref(rect)):
+			return (rect.left, rect.top, rect.right, rect.bottom)
+		return None
+	except (AttributeError, OSError, OverflowError):
+		return None
+
+
+def crop_to_rect(
+	image: Image.Image,
+	rect: tuple[int, int, int, int],
+) -> Image.Image:
+	"""Crop image to the given (left, top, right, bottom) rect in physical pixels.
+
+	Clamps to image bounds to handle windows partially off-screen.
+	"""
+	img_w, img_h = image.size
+	left = max(0, min(rect[0], img_w))
+	top = max(0, min(rect[1], img_h))
+	right = max(0, min(rect[2], img_w))
+	bottom = max(0, min(rect[3], img_h))
+
+	# Skip crop if rect is invalid or zero-sized
+	if right <= left or bottom <= top:
+		return image
+
+	return image.crop((left, top, right, bottom))
+
+
 def capture_screenshot() -> Image.Image:
 	"""Capture the primary monitor as a PIL Image (physical pixels)."""
 	with mss.mss() as sct:
