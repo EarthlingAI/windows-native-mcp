@@ -7,7 +7,16 @@ from windows_native_mcp.tools import snapshot, click, type_text, scroll, shortcu
 
 mcp = FastMCP(
 	"windows_native_mcp",
-	instructions="Windows 11+ desktop automation: screenshots, UI interaction, window management. Observe-act loop: snapshot to get numbered labels, then act with click/type_text/scroll/shortcut/app. Labels expire after every action — re-snapshot before the next interaction. All coordinates are logical pixels on the primary monitor. Cannot send input to elevated (admin) windows from a non-elevated process.",
+	instructions=(
+		"OS-level native Windows desktop automation — take screenshots, click UI elements, "
+		"type text, scroll, press keyboard shortcuts, and launch or manage applications. "
+		"Use for any task requiring direct desktop interaction: reading on-screen content, "
+		"filling forms, navigating menus, installing software, or configuring system settings. "
+		"Observe-act loop: call snapshot to capture the screen with numbered UI element labels, "
+		"then act with click/type_text/scroll/shortcut/app. Labels expire after every action — "
+		"re-snapshot before the next interaction. All coordinates are logical pixels on the "
+		"primary monitor. Cannot send input to elevated (admin) windows from a non-elevated process."
+	),
 )
 
 
