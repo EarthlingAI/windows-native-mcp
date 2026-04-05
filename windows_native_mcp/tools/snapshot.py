@@ -1,6 +1,8 @@
 """Snapshot tool — capture desktop state (screenshot + UI tree + element labels)."""
 import json
 import logging
+from datetime import datetime
+from pathlib import Path
 from typing import Annotated, Literal
 
 from fastmcp import FastMCP
@@ -9,6 +11,7 @@ from mcp.types import ToolAnnotations
 from pydantic import Field
 
 from windows_native_mcp.core.state import desktop_state, ElementInfo
+from fastmcp.exceptions import ToolError
 from windows_native_mcp.core.screen import (
 	capture_screenshot,
 	annotate_screenshot,
@@ -17,6 +20,8 @@ from windows_native_mcp.core.screen import (
 	get_screen_size,
 	get_window_rect,
 	crop_to_rect,
+	crop_region,
+	draw_grid_overlay,
 )
 from windows_native_mcp.core.uia import get_desktop_elements
 
@@ -119,6 +124,18 @@ def register(mcp: FastMCP):
 			bool,
 			Field(description="Exclude elements outside the visible viewport"),
 		] = True,
+		grid: Annotated[
+			Literal["off", "rulers", "full"],
+			Field(description="Coordinate grid overlay on screenshot: off (default), rulers (axis labels on edges), full (rulers + interior grid lines). Useful for precise coordinate targeting"),
+		] = "off",
+		grid_interval: Annotated[
+			int | str,
+			Field(description="Grid spacing in logical pixels. 'auto' (default) picks a clean interval for ~12 lines per axis. Pass an int for explicit spacing (e.g. 50)"),
+		] = "auto",
+		crop: Annotated[
+			list[int] | None,
+			Field(description="Crop to region [left, top, right, bottom] in logical pixels. Zooms into a specific area. Grid labels preserve original screen coordinates. Overrides window auto-crop"),
+		] = None,
 	) -> list | dict:
 		"""Capture current desktop state as a UI element tree with numbered labels.
 
@@ -135,7 +152,15 @@ def register(mcp: FastMCP):
 		targeting — use [x, y] coordinates from the screenshot instead.
 		When window-scoped, screenshot is auto-cropped to the window bounds.
 		Otherwise, screenshot captures the primary monitor.
+
+		Use grid="rulers" or grid="full" to overlay a coordinate grid on the
+		screenshot for precise coordinate-based targeting. Use crop to zoom into
+		a specific region. Both auto-enable screenshot.
 		"""
+		# Auto-enable screenshot when grid or crop is requested
+		if grid != "off" or crop is not None:
+			screenshot = True
+
 		scale_factor = get_dpi_scale()
 		screen_size = get_screen_size()
 
@@ -179,17 +204,38 @@ def register(mcp: FastMCP):
 		img = capture_screenshot()
 		annotated = annotate_screenshot(img, elements, scale_factor)
 
-		# Crop to window bounds if window-scoped and not minimized
+		# Determine crop and track origin for grid coordinate labels
 		window_handle = metadata.get("window_handle")
-		if window_handle and not metadata.get("window_minimized"):
+		crop_origin = (0, 0)
+
+		if crop is not None:
+			# User crop takes precedence over window auto-crop
+			if len(crop) != 4:
+				raise ToolError("crop must be [left, top, right, bottom] with 4 values")
+			annotated = crop_region(annotated, tuple(crop), scale_factor)
+			crop_origin = (crop[0], crop[1])
+		elif window_handle and not metadata.get("window_minimized"):
 			win_rect = get_window_rect(window_handle)
 			if win_rect:
 				annotated = crop_to_rect(annotated, win_rect)
+				crop_origin = (int(win_rect[0] / scale_factor), int(win_rect[1] / scale_factor))
+
+		# Draw grid overlay (no-op if grid="off")
+		if grid != "off":
+			annotated = draw_grid_overlay(annotated, grid, grid_interval, scale_factor, crop_origin)
 
 		png_bytes = screenshot_to_bytes(annotated)
 
+		# Save annotated screenshot to outputs/ for external viewing
+		outputs_dir = Path(__file__).resolve().parent.parent.parent / "outputs"
+		outputs_dir.mkdir(exist_ok=True)
+		timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+		screenshot_path = outputs_dir / f"snapshot_{timestamp}.png"
+		screenshot_path.write_bytes(png_bytes)
+		logging.info(f"Screenshot saved to {screenshot_path}")
+
 		text_content = json.dumps({
-			"metadata": metadata,
+			"metadata": {**metadata, "screenshot_path": str(screenshot_path)},
 			"elements": elements_tree,
 		}, indent=None, separators=(",", ":"))
 

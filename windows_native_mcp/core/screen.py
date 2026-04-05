@@ -7,6 +7,7 @@ import ctypes
 import ctypes.wintypes
 import io
 import logging
+import math
 
 import mss
 from PIL import Image, ImageDraw, ImageFont
@@ -160,6 +161,129 @@ def annotate_screenshot(
 			continue  # Skip this label if drawing still fails
 
 	return img
+
+
+def crop_region(
+	image: Image.Image,
+	crop: tuple[int, int, int, int],
+	scale_factor: float,
+) -> Image.Image:
+	"""Crop image to a region specified in logical pixels.
+
+	Converts logical pixel coordinates to physical pixels and delegates
+	to crop_to_rect() which handles clamping to image bounds.
+	"""
+	physical = (
+		int(crop[0] * scale_factor),
+		int(crop[1] * scale_factor),
+		int(crop[2] * scale_factor),
+		int(crop[3] * scale_factor),
+	)
+	return crop_to_rect(image, physical)
+
+
+def _pick_nice_interval(max_logical_dim: float) -> int:
+	"""Pick a visually clean grid interval targeting ~12 lines per axis."""
+	raw = max_logical_dim / 12
+	nice_values = [10, 20, 25, 50, 100, 200, 250, 500, 1000]
+	for val in nice_values:
+		if raw <= val:
+			return val
+	return int(round(raw / 100) * 100) or 100
+
+
+def draw_grid_overlay(
+	image: Image.Image,
+	grid: str,
+	grid_interval: int | str,
+	scale_factor: float,
+	origin: tuple[int, int] = (0, 0),
+) -> Image.Image:
+	"""Draw coordinate grid overlay on a screenshot.
+
+	Args:
+		image: PIL Image in physical pixels.
+		grid: "rulers" (edge rulers only) or "full" (rulers + interior lines).
+		grid_interval: "auto" or explicit int (logical pixels between lines).
+		scale_factor: Logical-to-physical pixel ratio.
+		origin: Logical pixel coordinate of the image's top-left corner,
+			so grid labels show absolute screen coordinates after cropping.
+
+	Returns:
+		New image with grid overlay composited on top.
+	"""
+	RULER_SIZE = 28  # px width of ruler strips
+
+	# Compute interval
+	logical_w = image.width / scale_factor
+	logical_h = image.height / scale_factor
+	if grid_interval == "auto":
+		interval = _pick_nice_interval(max(logical_w, logical_h))
+	else:
+		interval = max(10, int(grid_interval))
+
+	# Convert to RGBA for transparency compositing
+	base = image.convert("RGBA")
+	overlay = Image.new("RGBA", base.size, (0, 0, 0, 0))
+	draw = ImageDraw.Draw(overlay)
+
+	# Font for grid labels
+	try:
+		font = ImageFont.truetype("arial.ttf", 11)
+	except (OSError, IOError):
+		font = ImageFont.load_default()
+
+	# Draw ruler background strips
+	# Top ruler
+	draw.rectangle([0, 0, base.width, RULER_SIZE], fill=(0, 0, 0, 180))
+	# Left ruler
+	draw.rectangle([0, RULER_SIZE, RULER_SIZE, base.height], fill=(0, 0, 0, 180))
+
+	# Compute grid lines — vertical (X axis)
+	first_logical_x = math.ceil(origin[0] / interval) * interval
+	x = first_logical_x
+	while True:
+		px = int((x - origin[0]) * scale_factor)
+		if px >= base.width:
+			break
+		if px >= 0:
+			# Interior grid line
+			if grid == "full" and px > RULER_SIZE:
+				draw.line([(px, RULER_SIZE), (px, base.height)], fill=(0, 200, 255, 50), width=1)
+			# Tick on top ruler
+			draw.line([(px, RULER_SIZE - 6), (px, RULER_SIZE)], fill=(255, 255, 255, 200), width=1)
+			# Label on top ruler
+			label = str(x)
+			bbox = font.getbbox(label)
+			tw = bbox[2] - bbox[0]
+			lx = max(RULER_SIZE + 2, px - tw // 2)
+			draw.text((lx, 3), label, fill=(255, 255, 255, 220), font=font)
+		x += interval
+
+	# Compute grid lines — horizontal (Y axis)
+	first_logical_y = math.ceil(origin[1] / interval) * interval
+	y = first_logical_y
+	while True:
+		py = int((y - origin[1]) * scale_factor)
+		if py >= base.height:
+			break
+		if py >= 0:
+			# Interior grid line
+			if grid == "full" and py > RULER_SIZE:
+				draw.line([(RULER_SIZE, py), (base.width, py)], fill=(0, 200, 255, 50), width=1)
+			# Tick on left ruler
+			draw.line([(RULER_SIZE - 6, py), (RULER_SIZE, py)], fill=(255, 255, 255, 200), width=1)
+			# Label on left ruler
+			label = str(y)
+			bbox = font.getbbox(label)
+			th = bbox[3] - bbox[1]
+			ly = max(RULER_SIZE + 2, py - th // 2)
+			draw.text((2, ly), label, fill=(255, 255, 255, 220), font=font)
+		y += interval
+
+	# Composite overlay onto base
+	result = Image.alpha_composite(base, overlay)
+	return result.convert("RGB")
 
 
 def screenshot_to_bytes(image: Image.Image, max_width: int = 1920) -> bytes:
