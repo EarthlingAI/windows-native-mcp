@@ -8,6 +8,7 @@ from pydantic import Field
 
 from windows_native_mcp.core.state import desktop_state
 from windows_native_mcp.core.input import key_combo
+from windows_native_mcp.tools.snapshot import run_post_action_snapshot
 
 
 def register(mcp: FastMCP):
@@ -31,12 +32,16 @@ def register(mcp: FastMCP):
 				description="Lowercase key combo using + separator. Modifiers: ctrl, shift, alt, win. Named keys: enter, tab, escape, backspace, delete, space, up, down, left, right, home, end, pageup, pagedown, f1-f12",
 			),
 		],
+		snapshot: Annotated[
+			bool,
+			Field(description="Re-snapshot after this action using previous snapshot settings. Saves a round-trip."),
+		] = False,
 	) -> dict:
 		"""Execute a keyboard shortcut or key combination.
 
 		Supports modifier combos (ctrl, shift, alt, win) and named keys
-		(enter, tab, escape, f1-f12, etc.). Element labels are invalidated
-		after shortcuts that may change the UI.
+		(enter, tab, escape, f1-f12, etc.). Labels are invalidated after
+		shortcuts that may change the UI. Pass snapshot=True to auto-refresh.
 		"""
 		uipi_warning = desktop_state.uipi_warning()
 
@@ -47,8 +52,10 @@ def register(mcp: FastMCP):
 
 		result = {
 			"keys": keys,
-			"state": "stale — call snapshot to refresh element labels",
+			"state": "stale",
 		}
 		if uipi_warning:
 			result["warning"] = uipi_warning
+		if snapshot:
+			result["snapshot"] = run_post_action_snapshot()
 		return result

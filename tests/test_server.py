@@ -823,6 +823,228 @@ def test_cache_used_metadata():
 		check("cache_used is True", metadata["cache_used"] is True)
 
 
+def test_depth_scoring():
+	"""Test depth bonus in scoring — shallow elements score higher."""
+	print("\n--- Depth Scoring Tests ---")
+
+	from windows_native_mcp.core.uia import _score_candidate, _Candidate
+
+	# Shallow element (depth 1) — same area as deep element
+	shallow = _Candidate(
+		control_type="ButtonControl", name="Nav", automation_id="",
+		is_enabled=True, bounding_rect=(0, 0, 100, 30), center=(50, 15),
+		coords_unavailable=False, depth=1, parent_idx=-1,
+		area=3000, bfs_order=0,
+	)
+
+	# Deep element (depth 8) — same area
+	deep = _Candidate(
+		control_type="ButtonControl", name="Data", automation_id="",
+		is_enabled=True, bounding_rect=(0, 0, 100, 30), center=(50, 15),
+		coords_unavailable=False, depth=8, parent_idx=-1,
+		area=3000, bfs_order=1,
+	)
+
+	# Mid-depth element (depth 4)
+	mid = _Candidate(
+		control_type="ButtonControl", name="Mid", automation_id="",
+		is_enabled=True, bounding_rect=(0, 0, 100, 30), center=(50, 15),
+		coords_unavailable=False, depth=4, parent_idx=-1,
+		area=3000, bfs_order=2,
+	)
+
+	s_shallow = _score_candidate(shallow, 1920, 1080)
+	s_deep = _score_candidate(deep, 1920, 1080)
+	s_mid = _score_candidate(mid, 1920, 1080)
+
+	check("shallow (depth 1) > deep (depth 8)", s_shallow > s_deep)
+	check("shallow (depth 1) > mid (depth 4)", s_shallow > s_mid)
+	check("mid (depth 4) > deep (depth 8)", s_mid > s_deep)
+
+
+def test_sibling_penalty():
+	"""Test sibling repetition penalty in scoring."""
+	print("\n--- Sibling Penalty Tests ---")
+
+	from windows_native_mcp.core.uia import _score_candidate, _Candidate
+
+	# Element with few siblings
+	few_siblings = _Candidate(
+		control_type="ListItemControl", name="Item", automation_id="",
+		is_enabled=True, bounding_rect=(0, 0, 200, 30), center=(100, 15),
+		coords_unavailable=False, depth=5, parent_idx=0,
+		area=6000, bfs_order=0, sibling_same_type_count=3,
+	)
+
+	# Element with many siblings (>20)
+	many_siblings = _Candidate(
+		control_type="ListItemControl", name="Item", automation_id="",
+		is_enabled=True, bounding_rect=(0, 0, 200, 30), center=(100, 15),
+		coords_unavailable=False, depth=5, parent_idx=0,
+		area=6000, bfs_order=1, sibling_same_type_count=50,
+	)
+
+	s_few = _score_candidate(few_siblings, 1920, 1080)
+	s_many = _score_candidate(many_siblings, 1920, 1080)
+
+	check("few siblings > many siblings (>20)", s_few > s_many)
+	check("penalty is 30 points", abs((s_few - s_many) - 30) < 0.01)
+
+
+def test_snapshot_param_on_actions():
+	"""Test all action tools have snapshot parameter defaulting to False."""
+	print("\n--- Snapshot Parameter Tests ---")
+
+	from windows_native_mcp.main import mcp
+	tool_list = asyncio.run(mcp.list_tools())
+	tools = {t.name: t for t in tool_list}
+
+	for tool_name in ["click", "type_text", "scroll", "shortcut"]:
+		if tool_name in tools:
+			schema = tools[tool_name].parameters
+			props = schema.get("properties", {})
+			has_snapshot = "snapshot" in props
+			check(f"{tool_name} has 'snapshot' param", has_snapshot)
+			if has_snapshot:
+				default = props["snapshot"].get("default", None)
+				check(f"{tool_name} snapshot defaults to False", default is False,
+					f"got {default}")
+		else:
+			check(f"{tool_name} tool found", False)
+
+
+def test_last_snapshot_params_stored():
+	"""Test DesktopState stores last_snapshot_params after snapshot."""
+	print("\n--- Last Snapshot Params Tests ---")
+
+	from windows_native_mcp.core.state import DesktopState
+
+	state = DesktopState()
+	check("last_snapshot_params starts None", state.last_snapshot_params is None)
+
+	# Simulate storing params
+	state.last_snapshot_params = {"detail": "standard", "window": "Test", "limit": 500}
+	check("last_snapshot_params stored", state.last_snapshot_params is not None)
+	check("params has window", state.last_snapshot_params["window"] == "Test")
+
+
+def test_execute_snapshot_helper():
+	"""Test _execute_snapshot returns valid structure."""
+	print("\n--- Execute Snapshot Helper Tests ---")
+
+	from windows_native_mcp.tools.snapshot import _execute_snapshot
+	from windows_native_mcp.core.state import desktop_state
+
+	result = _execute_snapshot()
+
+	check("result has metadata", "metadata" in result)
+	check("result has elements", "elements" in result)
+	check("elements is list", isinstance(result["elements"], list))
+	check("state not stale after execute", desktop_state.is_stale is False)
+	check("last_snapshot_params stored", desktop_state.last_snapshot_params is not None)
+	params = desktop_state.last_snapshot_params
+	check("params has detail", params["detail"] == "standard")
+	check("params has limit", params["limit"] == 500)
+
+
+def test_tree_output_data_collapse():
+	"""Test Text children collapse into values array for data types."""
+	print("\n--- Tree Output Data Collapse Tests ---")
+
+	from windows_native_mcp.core.state import ElementInfo
+	from windows_native_mcp.tools.snapshot import _build_tree_output
+
+	# TreeItem with 3 Text children — should collapse
+	elements = {
+		"1": ElementInfo(
+			label="1", name="Row 1", control_type="TreeItem",
+			bounding_rect=(0, 0, 800, 30), center=(400, 15),
+			parent_label=None, depth=0,
+		),
+		"2": ElementInfo(
+			label="2", name="Column A", control_type="Text",
+			bounding_rect=(0, 0, 200, 30), center=(100, 15),
+			parent_label="1", depth=1,
+		),
+		"3": ElementInfo(
+			label="3", name="Column B", control_type="Text",
+			bounding_rect=(200, 0, 400, 30), center=(300, 15),
+			parent_label="1", depth=1,
+		),
+		"4": ElementInfo(
+			label="4", name="Column C", control_type="Text",
+			bounding_rect=(400, 0, 600, 30), center=(500, 15),
+			parent_label="1", depth=1,
+		),
+	}
+
+	tree = _build_tree_output(elements, include_rects=False)
+	check("collapse: 1 root", len(tree) == 1)
+	root = tree[0]
+	check("collapse: has values", "values" in root)
+	check("collapse: no children key", "children" not in root)
+	check("collapse: 3 values", len(root.get("values", [])) == 3)
+	check("collapse: correct values", root.get("values") == ["Column A", "Column B", "Column C"])
+
+
+def test_tree_output_no_collapse_mixed():
+	"""Test that non-data types with mixed children do NOT collapse."""
+	print("\n--- Tree Output No Collapse Mixed Tests ---")
+
+	from windows_native_mcp.core.state import ElementInfo
+	from windows_native_mcp.tools.snapshot import _build_tree_output
+
+	# Button with Button children — should NOT collapse
+	elements = {
+		"1": ElementInfo(
+			label="1", name="Toolbar", control_type="Button",
+			bounding_rect=(0, 0, 800, 30), center=(400, 15),
+			parent_label=None, depth=0,
+		),
+		"2": ElementInfo(
+			label="2", name="Save", control_type="Button",
+			bounding_rect=(0, 0, 100, 30), center=(50, 15),
+			parent_label="1", depth=1,
+		),
+		"3": ElementInfo(
+			label="3", name="Load", control_type="Button",
+			bounding_rect=(100, 0, 200, 30), center=(150, 15),
+			parent_label="1", depth=1,
+		),
+	}
+
+	tree = _build_tree_output(elements, include_rects=False)
+	root = tree[0]
+	check("no collapse: has children", "children" in root)
+	check("no collapse: no values", "values" not in root)
+
+
+def test_tree_output_no_collapse_single_text():
+	"""Test that TreeItem with 1 Text child does NOT collapse."""
+	print("\n--- Tree Output No Collapse Single Text Tests ---")
+
+	from windows_native_mcp.core.state import ElementInfo
+	from windows_native_mcp.tools.snapshot import _build_tree_output
+
+	elements = {
+		"1": ElementInfo(
+			label="1", name="Row", control_type="TreeItem",
+			bounding_rect=(0, 0, 800, 30), center=(400, 15),
+			parent_label=None, depth=0,
+		),
+		"2": ElementInfo(
+			label="2", name="Only Child", control_type="Text",
+			bounding_rect=(0, 0, 200, 30), center=(100, 15),
+			parent_label="1", depth=1,
+		),
+	}
+
+	tree = _build_tree_output(elements, include_rects=False)
+	root = tree[0]
+	check("single text: has children", "children" in root)
+	check("single text: no values", "values" not in root)
+
+
 if __name__ == "__main__":
 	print("=" * 50)
 	print(" Windows Native MCP — Gate 1 + Phase 2 + Phase 3 Tests")
@@ -856,6 +1078,14 @@ if __name__ == "__main__":
 	test_cached_walk_fallback()
 	test_cached_pattern_reading()
 	test_cache_used_metadata()
+	test_depth_scoring()
+	test_sibling_penalty()
+	test_snapshot_param_on_actions()
+	test_last_snapshot_params_stored()
+	test_execute_snapshot_helper()
+	test_tree_output_data_collapse()
+	test_tree_output_no_collapse_mixed()
+	test_tree_output_no_collapse_single_text()
 
 	print(f"\n{'=' * 50}")
 	print(f" Results: {passed} passed, {failed} failed")

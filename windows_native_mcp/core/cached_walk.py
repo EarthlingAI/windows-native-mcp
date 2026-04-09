@@ -29,6 +29,7 @@ class _Candidate:
 	bfs_order: int
 	checked: bool | None = None
 	selected: bool | None = None
+	sibling_same_type_count: int = 0
 
 
 # ---------------------------------------------------------------------------
@@ -246,6 +247,7 @@ def collect_candidates(
 
 		# BFS using cached elements (zero COM calls from here)
 		# Queue: (cached_element, depth, parent_candidate_idx)
+		_sibling_counter: dict[tuple[int, str], int] = {}
 		queue: deque[tuple] = deque()
 		for child in _iter_cached_children(cached_root):
 			queue.append((child, 0, -1))
@@ -359,6 +361,9 @@ def collect_candidates(
 					selected=selected,
 				)
 				candidates.append(candidate)
+				sib_key = (parent_candidate_idx, ctrl_type)
+				_sibling_counter[sib_key] = _sibling_counter.get(sib_key, 0) + 1
+				candidate.sibling_same_type_count = _sibling_counter[sib_key]
 				my_idx = len(candidates) - 1
 				bfs_counter += 1
 

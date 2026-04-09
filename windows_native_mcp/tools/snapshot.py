@@ -68,17 +68,80 @@ def _build_tree_output(
 			children_map[parent] = []
 		children_map[parent].append(label)
 
+	# Data types whose Text children can be collapsed into a values array
+	_DATA_TYPES = {"TreeItem", "ListItem", "DataItem"}
+
 	# Recursive nesting
 	def _nest(label: str) -> dict:
 		node = nodes[label]
 		child_labels = children_map.get(label, [])
 		if child_labels:
+			parent_type = elements[label].control_type
+			if parent_type in _DATA_TYPES:
+				text_children = [cl for cl in child_labels if elements[cl].control_type == "Text"]
+				non_text_children = [cl for cl in child_labels if elements[cl].control_type != "Text"]
+				if len(text_children) >= 2 and not non_text_children:
+					values = [elements[cl].name for cl in text_children if elements[cl].name]
+					if values:
+						node["values"] = values
+					return node
 			node["children"] = [_nest(cl) for cl in child_labels]
 		return node
 
 	# Root nodes have parent_label=None (or orphaned parent)
 	root_labels = children_map.get(None, [])
 	return [_nest(rl) for rl in root_labels]
+
+
+def _execute_snapshot(
+	detail: str = "standard",
+	window: str | None = None,
+	limit: int = 500,
+	types: list[str] | None = None,
+	viewport_only: bool = True,
+	include_rects: bool = False,
+) -> dict:
+	"""Core snapshot logic (no screenshot). Used by snapshot tool and post-action auto-snapshot."""
+	scale_factor = get_dpi_scale()
+	screen_size = get_screen_size()
+	type_filter = set(t + "Control" for t in types) if types else None
+
+	elements, metadata = get_desktop_elements(
+		detail=detail,
+		window_name=window,
+		scale_factor=scale_factor,
+		limit=limit,
+		type_filter=type_filter,
+		screen_size=screen_size,
+		viewport_only=viewport_only,
+	)
+
+	desktop_state.elements = elements
+	desktop_state.scale_factor = scale_factor
+	desktop_state.screen_size = screen_size
+	desktop_state.is_stale = False
+	desktop_state.window_name = window
+	desktop_state.window_handle = metadata.get("window_handle")
+	desktop_state.last_element_count = len(elements)
+	desktop_state.last_snapshot_params = {
+		"detail": detail, "window": window, "limit": limit,
+		"types": types, "viewport_only": viewport_only,
+	}
+
+	metadata["scale_factor"] = scale_factor
+	metadata["screen_size"] = list(screen_size)
+	elements_tree = _build_tree_output(elements, include_rects)
+	return {"metadata": metadata, "elements": elements_tree}
+
+
+def run_post_action_snapshot() -> dict:
+	"""Run snapshot using last snapshot params. For post-action auto-refresh."""
+	import time
+	params = desktop_state.last_snapshot_params
+	if params is None:
+		params = {"detail": "standard", "window": None, "limit": 500, "types": None, "viewport_only": True}
+	time.sleep(0.15)  # Brief settling delay for UI transitions
+	return _execute_snapshot(**params)
 
 
 def register(mcp: FastMCP):
@@ -161,49 +224,25 @@ def register(mcp: FastMCP):
 		if grid != "off" or crop is not None:
 			screenshot = True
 
-		scale_factor = get_dpi_scale()
-		screen_size = get_screen_size()
-
 		logging.info(f"Snapshot: detail={detail}, window={window}, screenshot={screenshot}, limit={limit}, types={types}")
 
-		# Convert short type names to full UIA names
-		type_filter = set(t + "Control" for t in types) if types else None
-
-		# Get UI elements
-		elements, metadata = get_desktop_elements(
-			detail=detail,
-			window_name=window,
-			scale_factor=scale_factor,
-			limit=limit,
-			type_filter=type_filter,
-			screen_size=screen_size,
-			viewport_only=viewport_only,
+		# Core element collection + state update
+		result = _execute_snapshot(
+			detail=detail, window=window, limit=limit,
+			types=types, viewport_only=viewport_only,
+			include_rects=include_rects,
 		)
 
-		# Update shared state
-		desktop_state.elements = elements
-		desktop_state.scale_factor = scale_factor
-		desktop_state.screen_size = screen_size
-		desktop_state.is_stale = False
-		desktop_state.window_name = window
-		desktop_state.window_handle = metadata.get("window_handle")
-		desktop_state.last_element_count = len(elements)
-
-		metadata["scale_factor"] = scale_factor
-		metadata["screen_size"] = list(screen_size)
-
-		# Build hierarchical element output
-		elements_tree = _build_tree_output(elements, include_rects)
-
 		if not screenshot:
-			return {
-				"metadata": metadata,
-				"elements": elements_tree,
-			}
+			return result
+
+		metadata = result["metadata"]
+		elements_tree = result["elements"]
 
 		# Capture and annotate screenshot
 		img = capture_screenshot()
-		annotated = annotate_screenshot(img, elements, scale_factor)
+		scale_factor = desktop_state.scale_factor
+		annotated = annotate_screenshot(img, desktop_state.elements, scale_factor)
 
 		# Determine crop and track origin for grid coordinate labels
 		window_handle = metadata.get("window_handle")

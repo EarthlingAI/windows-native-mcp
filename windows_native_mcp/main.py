@@ -10,12 +10,12 @@ mcp = FastMCP(
 	instructions=(
 		"OS-level native Windows desktop automation — take screenshots, click UI elements, "
 		"type text, scroll, press keyboard shortcuts, and launch or manage applications. "
-		"Use for any task requiring direct desktop interaction: reading on-screen content, "
-		"filling forms, navigating menus, installing software, or configuring system settings. "
-		"Observe-act loop: call snapshot to capture the screen with numbered UI element labels, "
-		"then act with click/type_text/scroll/shortcut/app. Labels expire after every action — "
-		"re-snapshot before the next interaction. All coordinates are logical pixels on the "
-		"primary monitor. Cannot send input to elevated (admin) windows from a non-elevated process."
+		"Observe-act loop: call snapshot to get numbered UI element labels, then act with "
+		"click/type_text/scroll/shortcut/app. Labels expire after every action — pass "
+		"snapshot=true on action tools to auto-refresh in one call, or call snapshot "
+		"separately. Scope snapshots to the target window for faster, more complete results. "
+		"Only enable screenshot when the UI tree alone is insufficient. "
+		"All coordinates are logical pixels on the primary monitor."
 	),
 )
 

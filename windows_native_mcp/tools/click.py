@@ -9,6 +9,7 @@ from pydantic import Field
 
 from windows_native_mcp.core.state import desktop_state
 from windows_native_mcp.core.input import mouse_click, mouse_move, mouse_drag, focus_window_if_needed
+from windows_native_mcp.tools.snapshot import run_post_action_snapshot
 
 
 def register(mcp: FastMCP):
@@ -49,14 +50,17 @@ def register(mcp: FastMCP):
 			str | None,
 			Field(description="Window to focus before action (default: window from last snapshot)"),
 		] = None,
+		snapshot: Annotated[
+			bool,
+			Field(description="Re-snapshot after this action using previous snapshot settings. Saves a round-trip."),
+		] = False,
 	) -> dict:
 		"""Click, double-click, right-click, hover, or drag at a target.
 
 		Use element labels from a recent snapshot for precise targeting.
-		Labels are invalidated after this action — re-snapshot before
-		the next interaction. Auto-focuses the window from the last
-		scoped snapshot. For desktop-wide snapshots, pass window to
-		focus a specific window first.
+		Labels are invalidated after this action. Pass snapshot=True to
+		automatically re-snapshot, or call snapshot separately.
+		Auto-focuses the window from the last scoped snapshot.
 		"""
 		x, y = desktop_state.resolve_target(target)
 		scale = desktop_state.scale_factor
@@ -92,8 +96,10 @@ def register(mcp: FastMCP):
 		result = {
 			"action": action,
 			"coordinates": [x, y],
-			"state": "stale — call snapshot to refresh element labels",
+			"state": "stale",
 		}
 		if uipi_warning:
 			result["warning"] = uipi_warning
+		if snapshot:
+			result["snapshot"] = run_post_action_snapshot()
 		return result

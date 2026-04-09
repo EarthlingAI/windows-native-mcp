@@ -298,6 +298,7 @@ class _Candidate:
 	bfs_order: int             # Original BFS position (for stable sort tiebreaker)
 	checked: bool | None = None    # True/False for checkboxes/toggles, None if N/A
 	selected: bool | None = None   # True/False for radio buttons, list items, tab items
+	sibling_same_type_count: int = 0  # Count of same-type siblings under same parent
 
 
 _CONTAINER_TYPES_FULL = {"ToolBarControl", "MenuBarControl", "ScrollBarControl"}
@@ -337,6 +338,16 @@ def _score_candidate(c: _Candidate, screen_w: int, screen_h: int) -> float:
 	# Coords unavailable penalty
 	if c.coords_unavailable:
 		score -= 20
+
+	# Depth bonus: shallow elements are structurally more important (nav, toolbars)
+	if c.depth <= 2:
+		score += 40
+	elif c.depth <= 5:
+		score += 20
+
+	# Sibling repetition penalty: data rows in large lists
+	if c.sibling_same_type_count > 20:
+		score -= 30
 
 	return score
 
@@ -386,7 +397,7 @@ def _walk_and_rank(
 					coords_unavailable=cc.coords_unavailable, depth=cc.depth,
 					parent_idx=cc.parent_idx, area=cc.area,
 					bfs_order=cc.bfs_order, checked=cc.checked,
-					selected=cc.selected,
+					selected=cc.selected, sibling_same_type_count=cc.sibling_same_type_count,
 				))
 			bfs_counter = len(candidates)
 			cache_used = True
@@ -400,6 +411,8 @@ def _walk_and_rank(
 		queue: deque[tuple[uiautomation.Control, int, int]] = deque()
 		for child in _safe_get_children(root):
 			queue.append((child, 0, -1))
+
+	_sibling_counter: dict[tuple[int, str], int] = {}
 
 	# BFS loop — only entered when cache_used is False
 	while not cache_used and queue:
@@ -543,6 +556,9 @@ def _walk_and_rank(
 				selected=selected,
 			)
 			candidates.append(candidate)
+			sib_key = (parent_candidate_idx, ctrl_type)
+			_sibling_counter[sib_key] = _sibling_counter.get(sib_key, 0) + 1
+			candidate.sibling_same_type_count = _sibling_counter[sib_key]
 			my_idx = len(candidates) - 1
 			bfs_counter += 1
 

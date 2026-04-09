@@ -45,6 +45,7 @@ class DesktopState:
 	window_name: str | None = None      # Window name from last scoped snapshot
 	window_handle: int | None = None     # HWND from last scoped snapshot
 	last_element_count: int = -1         # Elements found in last snapshot (-1 = no snapshot yet)
+	last_snapshot_params: dict | None = None  # Params from last snapshot (for auto-snapshot replay)
 	is_admin: bool = field(default_factory=_check_admin)  # Cached at startup
 
 	def uipi_warning(self, window: str | None = None) -> str | None:
