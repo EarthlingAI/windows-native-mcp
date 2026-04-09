@@ -38,12 +38,17 @@ def register(mcp: FastMCP):
 		(enter, tab, escape, f1-f12, etc.). Element labels are invalidated
 		after shortcuts that may change the UI.
 		"""
+		uipi_warning = desktop_state.uipi_warning()
+
 		key_combo(keys)
 		desktop_state.invalidate()
 
 		logging.info(f"Shortcut: {keys}")
 
-		return {
+		result = {
 			"keys": keys,
 			"state": "stale — call snapshot to refresh element labels",
 		}
+		if uipi_warning:
+			result["warning"] = uipi_warning
+		return result

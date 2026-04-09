@@ -167,6 +167,12 @@ def _send_inputs(*inputs: INPUT) -> int:
 	arr = (INPUT * n)(*inputs)
 	size = ctypes.sizeof(INPUT)
 	sent = ctypes.windll.user32.SendInput(n, arr, size)
+	if sent == 0 and n > 0:
+		raise RuntimeError(
+			f"SendInput blocked — sent 0 of {n} inputs. "
+			f"The target window is likely elevated or protected (e.g. admin dialog, Windows Hello, UAC prompt). "
+			f"Run from an admin terminal to send input to higher-integrity windows."
+		)
 	if sent != n:
 		logging.warning("SendInput: sent %d of %d inputs", sent, n)
 	return sent

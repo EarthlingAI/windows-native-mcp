@@ -63,6 +63,7 @@ def register(mcp: FastMCP):
 		Auto-focuses the window from the last scoped snapshot.
 		"""
 		scale = desktop_state.scale_factor
+		uipi_warning = desktop_state.uipi_warning(window)
 
 		# Bring target window to foreground before sending input
 		focus_window_if_needed(desktop_state, window)
@@ -104,9 +105,12 @@ def register(mcp: FastMCP):
 		desktop_state.invalidate()
 		logging.info(f"Type: {len(text)} chars via {actual_method}" + (" + submit" if submit else ""))
 
-		return {
+		result = {
 			"typed": len(text),
 			"method": actual_method,
 			"submitted": submit,
 			"state": "stale — call snapshot to refresh element labels",
 		}
+		if uipi_warning:
+			result["warning"] = uipi_warning
+		return result

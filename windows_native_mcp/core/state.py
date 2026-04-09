@@ -2,8 +2,20 @@
 
 Snapshot populates state; action tools consume and invalidate it.
 """
+import ctypes
+import sys
 from dataclasses import dataclass, field
 from fastmcp.exceptions import ToolError
+
+
+def _check_admin() -> bool:
+	"""Check if the current process has admin privileges (Windows only)."""
+	if sys.platform != "win32":
+		return False
+	try:
+		return ctypes.windll.shell32.IsUserAnAdmin() != 0
+	except (AttributeError, OSError):
+		return False
 
 
 @dataclass
@@ -32,6 +44,24 @@ class DesktopState:
 	is_stale: bool = True
 	window_name: str | None = None      # Window name from last scoped snapshot
 	window_handle: int | None = None     # HWND from last scoped snapshot
+	last_element_count: int = -1         # Elements found in last snapshot (-1 = no snapshot yet)
+	is_admin: bool = field(default_factory=_check_admin)  # Cached at startup
+
+	def uipi_warning(self, window: str | None = None) -> str | None:
+		"""Return a warning string if the last snapshot suggests UIPI issues, else None.
+
+		Skipped when running as admin (UIPI only blocks lower→higher integrity).
+		"""
+		if self.is_admin:
+			return None
+		if self.window_name is None or self.last_element_count != 0:
+			return None
+		target = window or self.window_name
+		return (
+			f"Window '{target}' returned 0 UI elements in the last snapshot. "
+			f"If this window is elevated (admin), input will be silently dropped by Windows (UIPI). "
+			f"Run from an admin terminal to interact with elevated windows."
+		)
 
 	def resolve_target(self, target: str | list[int]) -> tuple[int, int]:
 		"""Resolve a target (label string or [x, y] list) to logical pixel coordinates.

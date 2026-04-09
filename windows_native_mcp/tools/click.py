@@ -4,7 +4,6 @@ import time
 from typing import Annotated, Literal
 
 from fastmcp import FastMCP
-from fastmcp.exceptions import ToolError
 from mcp.types import ToolAnnotations
 from pydantic import Field
 
@@ -61,6 +60,7 @@ def register(mcp: FastMCP):
 		"""
 		x, y = desktop_state.resolve_target(target)
 		scale = desktop_state.scale_factor
+		uipi_warning = desktop_state.uipi_warning(window)
 
 		# Bring target window to foreground before sending input
 		focus_window_if_needed(desktop_state, window)
@@ -89,8 +89,11 @@ def register(mcp: FastMCP):
 		desktop_state.invalidate()
 		logging.info(f"Click: {action}")
 
-		return {
+		result = {
 			"action": action,
 			"coordinates": [x, y],
 			"state": "stale — call snapshot to refresh element labels",
 		}
+		if uipi_warning:
+			result["warning"] = uipi_warning
+		return result

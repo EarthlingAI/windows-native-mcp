@@ -48,6 +48,7 @@ def register(mcp: FastMCP):
 		scoped snapshot.
 		"""
 		scale = desktop_state.scale_factor
+		uipi_warning = desktop_state.uipi_warning(window)
 
 		# Bring target window to foreground before sending input
 		focus_window_if_needed(desktop_state, window)
@@ -63,9 +64,12 @@ def register(mcp: FastMCP):
 
 		logging.info(f"Scroll: {direction} {amount} clicks at ({x},{y})")
 
-		return {
+		result = {
 			"direction": direction,
 			"amount": amount,
 			"coordinates": [x, y],
 			"state": "stale — call snapshot to refresh element labels",
 		}
+		if uipi_warning:
+			result["warning"] = uipi_warning
+		return result
