@@ -320,7 +320,7 @@ def collect_candidates(
 				else:
 					center = ((left + right) // 2, (top + bottom) // 2)
 
-				# Viewport filter
+				# Viewport filter: AABB intersection test
 				if viewport_rect:
 					if c_coords_unavailable:
 						viewport_filtered_count += 1
@@ -328,10 +328,8 @@ def collect_candidates(
 							for child in _iter_cached_children(element):
 								queue.append((child, depth + 1, parent_candidate_idx))
 						continue
-					_VP_MARGIN = 50
 					vl, vt, vr, vb = viewport_rect
-					cx, cy = center
-					if cx < vl - _VP_MARGIN or cx > vr + _VP_MARGIN or cy < vt - _VP_MARGIN or cy > vb + _VP_MARGIN:
+					if right < vl or left > vr or bottom < vt or top > vb:
 						viewport_filtered_count += 1
 						if depth < max_depth:
 							for child in _iter_cached_children(element):

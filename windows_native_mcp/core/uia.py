@@ -504,11 +504,10 @@ def _walk_and_rank(
 			else:
 				center = ((left + right) // 2, (top + bottom) // 2)
 
-			# Viewport filter: skip elements outside the visible area
+			# Viewport filter: skip elements that don't intersect the visible area.
+			# Uses AABB intersection test on element bounding rect vs window rect.
 			# Also filter coords_unavailable elements — in virtualized lists
 			# (e.g. File Explorer Home), offscreen items report (0,0,0,0)
-			# Margin accounts for sidebars/toolbars extending beyond the window rect
-			# (e.g. WinUI NavigationView collapsed sidebar in Task Manager)
 			if viewport_rect:
 				if c_coords_unavailable:
 					viewport_filtered_count += 1
@@ -519,10 +518,8 @@ def _walk_and_rank(
 						except OverflowError:
 							pass
 					continue
-				_VP_MARGIN = 50
 				vl, vt, vr, vb = viewport_rect
-				cx, cy = center
-				if cx < vl - _VP_MARGIN or cx > vr + _VP_MARGIN or cy < vt - _VP_MARGIN or cy > vb + _VP_MARGIN:
+				if right < vl or left > vr or bottom < vt or top > vb:
 					viewport_filtered_count += 1
 					if depth < max_depth:
 						try:

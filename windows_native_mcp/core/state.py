@@ -74,6 +74,16 @@ class DesktopState:
 				raise ToolError(f"Coordinate target must be [x, y], got {target}")
 			return (int(target[0]), int(target[1]))
 
+		# Handle string-encoded coordinate lists (e.g. "[708, 600]" from Pydantic union coercion)
+		if isinstance(target, str) and target.startswith("[") and target.endswith("]"):
+			import json
+			try:
+				coords = json.loads(target)
+				if isinstance(coords, list) and len(coords) == 2:
+					return (int(coords[0]), int(coords[1]))
+			except (json.JSONDecodeError, ValueError, TypeError):
+				pass
+
 		label = str(target)
 		if label not in self.elements:
 			if self.is_stale:

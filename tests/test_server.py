@@ -1289,6 +1289,43 @@ def test_app_size_on_launch():
 	check("size description mentions launch", "Window size for launch" in source)
 
 
+def test_viewport_intersection_filter():
+	"""Test that intersection-based viewport filter handles edge cases correctly."""
+	print("\n--- Viewport Intersection Filter Tests ---")
+
+	# The AABB non-intersection test (True = no overlap = reject)
+	def is_outside(el_l, el_t, el_r, el_b, vl, vt, vr, vb):
+		return el_r < vl or el_l > vr or el_b < vt or el_t > vb
+
+	vp = (100, 100, 500, 400)  # viewport: left, top, right, bottom
+
+	# Basic cases
+	check("fully inside: kept", not is_outside(200, 200, 300, 300, *vp))
+	check("fully left: rejected", is_outside(0, 200, 90, 300, *vp))
+	check("fully right: rejected", is_outside(510, 200, 600, 300, *vp))
+	check("fully above: rejected", is_outside(200, 0, 300, 90, *vp))
+	check("fully below: rejected", is_outside(200, 410, 300, 500, *vp))
+
+	# Partial overlaps (the key improvement over center-point)
+	check("partial left overlap: kept", not is_outside(80, 200, 120, 300, *vp))
+	check("partial right overlap: kept", not is_outside(480, 200, 520, 300, *vp))
+	check("partial top overlap: kept", not is_outside(200, 80, 300, 120, *vp))
+	check("partial bottom overlap: kept", not is_outside(200, 380, 300, 420, *vp))
+
+	# Task Manager sidebar case: element extends left of window
+	check("sidebar extends left of window: kept",
+		not is_outside(236, 300, 276, 340, 256, 0, 1200, 800))
+
+	# Edge-touching
+	check("edge touching (right==left): kept", not is_outside(50, 200, 100, 300, *vp))
+	check("1px gap: rejected", is_outside(50, 200, 99, 300, *vp))
+
+	# Special cases
+	check("element encloses viewport: kept", not is_outside(0, 0, 600, 500, *vp))
+	check("zero-size inside: kept", not is_outside(200, 200, 200, 200, *vp))
+	check("zero-size outside: rejected", is_outside(50, 50, 50, 50, *vp))
+
+
 if __name__ == "__main__":
 	print("=" * 50)
 	print(" Windows Native MCP — Full Test Suite (Round 3)")
@@ -1336,6 +1373,7 @@ if __name__ == "__main__":
 	test_reserved_slots()
 	test_adaptive_termination()
 	test_app_size_on_launch()
+	test_viewport_intersection_filter()
 
 	print(f"\n{'=' * 50}")
 	print(f" Results: {passed} passed, {failed} failed")
