@@ -54,6 +54,11 @@ windows_native_mcp/
     └── cached_walk.py  # CacheRequest fast-path walk
 ```
 
+- **`main.py` is a thin dispatcher** — server construction with `instructions=`, tool registration via module `register()` functions. No business logic.
+- **`core/state.py` is the shared state contract** — `DesktopState` singleton holds the element registry populated by snapshot and consumed by action tools. `resolve_target()` converts labels or `[x, y]` coordinates to pixel coords.
+- **`core/uia.py` and `core/cached_walk.py` are dual code paths** — the cached walk batches all COM property reads into a single roundtrip (faster). BFS walk is the fallback. Both must produce identical filtering, scoring, and termination behavior.
+- **Each `tools/*.py` exports `register(mcp)`** — handles parameter validation (Pydantic), state consumption, and response formatting. Business logic stays in `core/`.
+
 ## Snapshot Features
 
 ### Coordinate Grid Overlay
@@ -96,6 +101,25 @@ For data-heavy UIs (Task Manager, File Explorer), the tree output collapses Text
 ## Performance
 
 Standard mode uses a CacheRequest-based fast path that batches all UI Automation property reads into a single COM roundtrip, typically 10-20x faster than individual COM calls. Falls back to traditional BFS walk on any COM error. Metadata includes `cache_used: true` when the fast path is active.
+
+## Response Format
+
+**Snapshot (no screenshot):**
+```python
+{"metadata": {"element_count": N, "window": "...", ...}, "elements": [{tree}]}
+```
+
+**Snapshot (with screenshot):**
+```python
+[Image(png), '{"metadata": {..., "screenshot_path": "..."}, "elements": [...]}']
+```
+
+**Action tools (click, scroll, shortcut, type_text):**
+```python
+{"action": "...", "coordinates": [x, y], "state": "stale", "snapshot": {snapshot result if enabled}}
+```
+
+**Errors:** `ToolError("message with cause + recovery action")` — FastMCP converts to `{ isError: true }`.
 
 ## Future Enhancements
 
