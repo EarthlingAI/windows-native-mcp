@@ -52,14 +52,13 @@ def register(mcp: FastMCP):
 		] = None,
 		snapshot: Annotated[
 			bool,
-			Field(description="Re-snapshot after this action using previous snapshot settings. Saves a round-trip."),
-		] = False,
+			Field(description="Auto-refresh UI tree after this action using previous snapshot settings. Set false to skip."),
+		] = True,
 	) -> dict:
 		"""Click, double-click, right-click, hover, or drag at a target.
 
 		Use element labels from a recent snapshot for precise targeting.
-		Labels are invalidated after this action. Pass snapshot=True to
-		automatically re-snapshot, or call snapshot separately.
+		Labels are invalidated and auto-refreshed after this action.
 		Auto-focuses the window from the last scoped snapshot.
 		"""
 		x, y = desktop_state.resolve_target(target)

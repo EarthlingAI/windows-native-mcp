@@ -34,16 +34,15 @@ def register(mcp: FastMCP):
 		],
 		snapshot: Annotated[
 			bool,
-			Field(description="Re-snapshot after this action using previous snapshot settings. Saves a round-trip."),
-		] = False,
+			Field(description="Auto-refresh UI tree after this action using previous snapshot settings. Set false to skip."),
+		] = True,
 	) -> dict:
 		"""Execute a keyboard shortcut or key combination.
 
 		Supports modifier combos (ctrl, shift, alt, win) and named keys
-		(enter, tab, escape, f1-f12, etc.). Labels are invalidated after
-		shortcuts that change the UI. Pass snapshot=True to auto-refresh
-		with a desktop-wide snapshot (ignores previous window scope, since
-		shortcuts may change focus).
+		(enter, tab, escape, f1-f12, etc.). Labels are invalidated and
+		auto-refreshed after execution. Auto-snapshot is desktop-wide
+		(ignores previous window scope, since shortcuts may change focus).
 		"""
 		uipi_warning = desktop_state.uipi_warning()
 

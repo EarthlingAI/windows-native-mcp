@@ -58,15 +58,14 @@ def register(mcp: FastMCP):
 		] = None,
 		snapshot: Annotated[
 			bool,
-			Field(description="Re-snapshot after this action using previous snapshot settings. Saves a round-trip."),
-		] = False,
+			Field(description="Auto-refresh UI tree after this action using previous snapshot settings. Set false to skip."),
+		] = True,
 	) -> dict:
 		"""Type text into the focused element or a specified target.
 
 		Auto mode uses clipboard paste for text >20 chars (overwrites clipboard)
 		and SendInput for shorter text. Use method='type' to preserve clipboard.
-		Labels are invalidated after this action. Pass snapshot=True to
-		automatically re-snapshot, or call snapshot separately.
+		Labels are invalidated and auto-refreshed after this action.
 
 		In address bars with autocomplete, typed text may be intercepted by
 		dropdown suggestions. Use shortcut(keys='ctrl+l') to re-focus the

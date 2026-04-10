@@ -201,8 +201,8 @@ def register(mcp: FastMCP):
 		] = True,
 		grid: Annotated[
 			Literal["off", "rulers", "full"],
-			Field(description="Coordinate grid overlay on screenshot: off (default), rulers (axis labels on edges), full (rulers + interior grid lines). Useful for precise coordinate targeting"),
-		] = "off",
+			Field(description="Coordinate grid overlay on screenshot: rulers (default, axis labels on edges), full (rulers + interior grid lines), off (clean image). Only applies when screenshot is enabled"),
+		] = "rulers",
 		grid_interval: Annotated[
 			int | str,
 			Field(description="Grid spacing in logical pixels. 'auto' (default) picks a clean interval for ~12 lines per axis. Pass an int for explicit spacing (e.g. 50)"),
@@ -215,25 +215,22 @@ def register(mcp: FastMCP):
 		"""Capture current desktop state as a UI element tree with numbered labels.
 
 		Returns numbered element labels for use as targets in click, type_text,
-		scroll, and other action tools. Labels are invalidated after any action —
-		always re-snapshot before the next interaction.
+		scroll, and other action tools. Labels are invalidated after any action.
 
 		Screenshot is off by default — the UI tree alone is sufficient for most
 		interactions. Enable screenshot=True when labels aren't giving enough
 		context, elements show coords_unavailable, or you need to verify visual
-		layout.
+		layout. Screenshots include a coordinate ruler overlay by default.
 
 		Elements marked coords_unavailable (common in UWP apps) cannot use label
 		targeting — use [x, y] coordinates from the screenshot instead.
 		When window-scoped, screenshot is auto-cropped to the window bounds.
 		Otherwise, screenshot captures the primary monitor.
 
-		Use grid="rulers" or grid="full" to overlay a coordinate grid on the
-		screenshot for precise coordinate-based targeting. Use crop to zoom into
-		a specific region. Both auto-enable screenshot.
+		Use crop to zoom into a specific region (auto-enables screenshot).
 		"""
-		# Auto-enable screenshot when grid or crop is requested
-		if grid != "off" or crop is not None:
+		# Auto-enable screenshot when crop is requested (crop is meaningless without screenshot)
+		if crop is not None:
 			screenshot = True
 
 		logging.info(f"Snapshot: detail={detail}, window={window}, screenshot={screenshot}, limit={limit}, types={types}")

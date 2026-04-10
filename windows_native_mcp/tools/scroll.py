@@ -43,13 +43,12 @@ def register(mcp: FastMCP):
 		] = None,
 		snapshot: Annotated[
 			bool,
-			Field(description="Re-snapshot after this action using previous snapshot settings. Saves a round-trip."),
-		] = False,
+			Field(description="Auto-refresh UI tree after this action using previous snapshot settings. Set false to skip."),
+		] = True,
 	) -> dict:
 		"""Scroll at a target location or screen center.
 
-		Labels are invalidated after scrolling. Pass snapshot=True to
-		automatically re-snapshot, or call snapshot separately.
+		Labels are invalidated and auto-refreshed after scrolling.
 		Auto-focuses the window from the last scoped snapshot.
 		"""
 		scale = desktop_state.scale_factor

@@ -999,7 +999,7 @@ def test_snapshot_param_on_actions():
 			check(f"{tool_name} has 'snapshot' param", has_snapshot)
 			if has_snapshot:
 				default = props["snapshot"].get("default", None)
-				check(f"{tool_name} snapshot defaults to False", default is False,
+				check(f"{tool_name} snapshot defaults to True", default is True,
 					f"got {default}")
 		else:
 			check(f"{tool_name} tool found", False)
@@ -1326,9 +1326,36 @@ def test_viewport_intersection_filter():
 	check("zero-size outside: rejected", is_outside(50, 50, 50, 50, *vp))
 
 
+def test_snapshot_grid_defaults():
+	"""Test snapshot grid defaults to rulers and doesn't auto-enable screenshot."""
+	print("\n--- Snapshot Grid Default Tests ---")
+
+	from windows_native_mcp.main import mcp
+	tool_list = asyncio.run(mcp.list_tools())
+	tools = {t.name: t for t in tool_list}
+
+	snapshot_tool = tools.get("snapshot")
+	check("snapshot tool exists", snapshot_tool is not None)
+
+	props = snapshot_tool.parameters.get("properties", {})
+	grid_prop = props.get("grid", {})
+	check("grid default is rulers", grid_prop.get("default") == "rulers")
+	check("grid has 3 enum values", len(grid_prop.get("enum", [])) == 3)
+
+	import inspect
+	from windows_native_mcp.tools import snapshot
+	source = inspect.getsource(snapshot)
+	# The old pattern was: if grid != "off" or crop is not None: screenshot = True
+	# New pattern should only have: if crop is not None: screenshot = True
+	check("grid does NOT auto-enable screenshot",
+		'grid != "off" or crop' not in source)
+	check("crop still auto-enables screenshot",
+		"crop is not None" in source)
+
+
 if __name__ == "__main__":
 	print("=" * 50)
-	print(" Windows Native MCP — Full Test Suite (Round 3)")
+	print(" Windows Native MCP — Full Test Suite (Round 4)")
 	print("=" * 50)
 
 	test_imports()
@@ -1374,6 +1401,7 @@ if __name__ == "__main__":
 	test_adaptive_termination()
 	test_app_size_on_launch()
 	test_viewport_intersection_filter()
+	test_snapshot_grid_defaults()
 
 	print(f"\n{'=' * 50}")
 	print(f" Results: {passed} passed, {failed} failed")

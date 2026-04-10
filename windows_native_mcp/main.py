@@ -11,10 +11,9 @@ mcp = FastMCP(
 		"OS-level native Windows desktop automation — take screenshots, click UI elements, "
 		"type text, scroll, press keyboard shortcuts, and launch or manage applications. "
 		"Observe-act loop: call snapshot to get numbered UI element labels, then act with "
-		"click/type_text/scroll/shortcut/app. Labels expire after every action — pass "
-		"snapshot=true on action tools to auto-refresh in one call, or call snapshot "
-		"separately. Scope snapshots to the target window for faster, more complete results. "
-		"Only enable screenshot when the UI tree alone is insufficient. "
+		"click/type_text/scroll/shortcut/app. Action tools auto-snapshot after execution "
+		"(pass snapshot=false to skip). Scope snapshots to the target window for faster, "
+		"more complete results. Only enable screenshot when the UI tree alone is insufficient. "
 		"In address bars with autocomplete, use Ctrl+L to re-focus before typing a path. "
 		"All coordinates are logical pixels on the primary monitor."
 	),
