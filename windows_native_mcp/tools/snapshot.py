@@ -209,7 +209,7 @@ def register(mcp: FastMCP):
 		] = "auto",
 		crop: Annotated[
 			list[int] | None,
-			Field(description="Crop to region [left, top, right, bottom] in logical pixels. Zooms into a specific area. Grid labels preserve original screen coordinates. Overrides window auto-crop"),
+			Field(description="Crop to region [left, top, right, bottom] in absolute screen coordinates (logical pixels). Coordinates must be within the target window's screen position. Overrides window auto-crop"),
 		] = None,
 	) -> list | dict:
 		"""Capture current desktop state as a UI element tree with numbered labels.

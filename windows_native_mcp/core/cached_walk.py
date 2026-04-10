@@ -11,6 +11,8 @@ from dataclasses import dataclass
 
 import uiautomation
 
+_NAV_TYPES = {"TabItemControl", "MenuItemControl", "TreeItemControl"}
+
 # Re-use _Candidate from uia.py (imported by caller), but define locally
 # to keep this module self-contained and avoid circular imports.
 @dataclass
@@ -326,9 +328,10 @@ def collect_candidates(
 							for child in _iter_cached_children(element):
 								queue.append((child, depth + 1, parent_candidate_idx))
 						continue
+					_VP_MARGIN = 50
 					vl, vt, vr, vb = viewport_rect
 					cx, cy = center
-					if cx < vl or cx > vr or cy < vt or cy > vb:
+					if cx < vl - _VP_MARGIN or cx > vr + _VP_MARGIN or cy < vt - _VP_MARGIN or cy > vb + _VP_MARGIN:
 						viewport_filtered_count += 1
 						if depth < max_depth:
 							for child in _iter_cached_children(element):
@@ -370,9 +373,17 @@ def collect_candidates(
 				if c_coords_unavailable:
 					coords_unavailable_count += 1
 
-			# Early termination
+			# Early termination — continue past max if no nav types found yet
 			if len(candidates) >= max_candidates:
-				break
+				if len(candidates) >= max_candidates * 5 // 3:
+					break
+				has_nav = any(
+					c.control_type in _NAV_TYPES
+					or (c.control_type == "ListItemControl" and c.sibling_same_type_count <= 10)
+					for c in candidates
+				)
+				if has_nav:
+					break
 
 			# Descend
 			if depth < max_depth:

@@ -76,6 +76,8 @@ When `screenshot=True`, annotated screenshots are saved to the `outputs/` direct
 
 All action tools (`click`, `type_text`, `scroll`, `shortcut`) accept a `snapshot` parameter (default `false`). When `true`, the tool automatically re-snapshots after the action using the previous snapshot's settings (window, detail level, limit, types, viewport_only), saving a round-trip. A 150ms settling delay allows UI transitions to complete before re-capturing. The `shortcut` tool uses a desktop-wide (unscoped) auto-snapshot since shortcuts may change window focus.
 
+Early termination is adaptive: BFS continues past the default candidate cap if no navigation elements (TabItem, MenuItem, TreeItem) have been collected yet, up to a hard cap.
+
 ## Scoring System
 
 Elements are ranked by a scoring function that considers:
@@ -85,6 +87,7 @@ Elements are ranked by a scoring function that considers:
 - **Navigation role boost** — TabItem, MenuItem, TreeItem get +35; ListItem with ≤10 siblings gets +25 (likely navigation, not data)
 - **Sibling repetition penalty** — elements with >20 same-type siblings under the same parent get -30, deprioritizing data rows in large lists
 - **Offscreen/coords_unavailable penalties**
+- **Reserved slots** — After scoring, TabItem/MenuItem/TreeItem elements that were pruned are swapped back in (up to 20 slots) by evicting the lowest-scored elements. Guarantees navigation elements survive even in 5000+ element UIs
 
 ## Data Collapse Output Optimization
 

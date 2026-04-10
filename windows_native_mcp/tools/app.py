@@ -244,7 +244,7 @@ def register(mcp: FastMCP):
 		] = None,
 		size: Annotated[
 			list[int] | str | None,
-			Field(description='[width, height] or preset name: "maximize", "left-half", "right-half", "center", etc.'),
+			Field(description='Window size for launch or resize mode. [width, height] or preset: "maximize", "left-half", "right-half", "center", etc.'),
 		] = None,
 		position: Annotated[
 			list[int] | None,
@@ -351,12 +351,31 @@ def register(mcp: FastMCP):
 								f"Launch failed: '{launch_label}' not found "
 								"(Windows error dialog detected)"
 							)
+						hwnd = win["handle"]
+						# Apply size if requested
+						if size is not None:
+							if isinstance(size, str) and size == "maximize":
+								user32.ShowWindow(hwnd, 3)  # SW_MAXIMIZE
+							elif isinstance(size, str):
+								screen_w, screen_h = get_screen_size()
+								x, y, w, h = _calculate_preset_rect(size, screen_w, screen_h)
+								user32.MoveWindow(hwnd, x, y, w, h, True)
+							elif isinstance(size, list) and len(size) == 2:
+								w, h = size
+								if position and len(position) == 2:
+									x, y = position
+								else:
+									screen_w, screen_h = get_screen_size()
+									x = (screen_w - w) // 2
+									y = (screen_h - h) // 2
+								user32.MoveWindow(hwnd, x, y, w, h, True)
 						desktop_state.invalidate()
-						logging.info(f"App launch: '{launch_label}' → handle {win['handle']}")
+						logging.info(f"App launch: '{launch_label}' → handle {hwnd}" + (f" (size={size})" if size else ""))
 						return {
 							"launched": launch_label,
-							"handle": win["handle"],
+							"handle": hwnd,
 							"title": win["title"],
+							"size": size if size else None,
 						}
 
 			desktop_state.invalidate()

@@ -507,6 +507,8 @@ def _walk_and_rank(
 			# Viewport filter: skip elements outside the visible area
 			# Also filter coords_unavailable elements — in virtualized lists
 			# (e.g. File Explorer Home), offscreen items report (0,0,0,0)
+			# Margin accounts for sidebars/toolbars extending beyond the window rect
+			# (e.g. WinUI NavigationView collapsed sidebar in Task Manager)
 			if viewport_rect:
 				if c_coords_unavailable:
 					viewport_filtered_count += 1
@@ -517,9 +519,10 @@ def _walk_and_rank(
 						except OverflowError:
 							pass
 					continue
+				_VP_MARGIN = 50
 				vl, vt, vr, vb = viewport_rect
 				cx, cy = center
-				if cx < vl or cx > vr or cy < vt or cy > vb:
+				if cx < vl - _VP_MARGIN or cx > vr + _VP_MARGIN or cy < vt - _VP_MARGIN or cy > vb + _VP_MARGIN:
 					viewport_filtered_count += 1
 					if depth < max_depth:
 						try:
@@ -576,8 +579,17 @@ def _walk_and_rank(
 				coords_unavailable_count += 1
 
 		# Early termination: enough candidates for scoring
+		# Continue past limit*3 if no nav types found yet (dense UIs like Task Manager)
 		if len(candidates) >= limit * 3:
-			break
+			if len(candidates) >= limit * 5:
+				break  # Hard cap
+			has_nav = any(
+				c.control_type in _NAV_TYPES
+				or (c.control_type == "ListItemControl" and c.sibling_same_type_count <= 10)
+				for c in candidates
+			)
+			if has_nav:
+				break
 
 		# Descend into children (respecting depth limit)
 		if depth < max_depth:
@@ -597,6 +609,29 @@ def _walk_and_rank(
 	scored = [(i, _score_candidate(c, screen_w, screen_h)) for i, c in enumerate(candidates)]
 	scored.sort(key=lambda x: (-x[1], candidates[x[0]].bfs_order))
 	selected_indices = [i for i, _ in scored[:limit]]
+
+	# --- Pass 2.5: Reserved slots for navigation types ---
+	# Ensure nav elements aren't completely pruned in dense UIs.
+	# Covers: TabItem/MenuItem/TreeItem AND ListItems with ≤10 siblings (nav-like, not data rows).
+	# Scan rejected candidates; swap them in by evicting lowest-scored.
+	if capped:
+		selected_set_tmp = set(selected_indices)
+		max_reserved = min(20, limit // 10)
+		reserved = []
+		for i, c in enumerate(candidates):
+			if i in selected_set_tmp:
+				continue
+			is_nav = (
+				c.control_type in _NAV_TYPES
+				or (c.control_type == "ListItemControl" and c.sibling_same_type_count <= 10)
+			)
+			if is_nav and not c.coords_unavailable:
+				reserved.append(i)
+			if len(reserved) >= max_reserved:
+				break
+		if reserved:
+			evict_count = len(reserved)
+			selected_indices = selected_indices[:-evict_count] + reserved
 
 	# Build mapping: original_candidate_idx → assigned_label
 	selected_set = set(selected_indices)

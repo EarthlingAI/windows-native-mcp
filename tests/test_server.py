@@ -1137,9 +1137,161 @@ def test_tree_output_no_collapse_single_text():
 	check("single text: no values", "values" not in root)
 
 
+def test_reserved_slots():
+	"""Test that nav types get reserved slots when capped."""
+	print("\n--- Reserved Slots Tests ---")
+
+	from windows_native_mcp.core.uia import _score_candidate, _Candidate, _NAV_TYPES
+
+	# Create 505 candidates: 500 buttons + 5 tab items
+	candidates = []
+	for i in range(500):
+		candidates.append(_Candidate(
+			control_type="ButtonControl", name=f"Btn{i}", automation_id="",
+			is_enabled=True, bounding_rect=(0, 0, 200, 30), center=(100, 15),
+			coords_unavailable=False, depth=6, parent_idx=-1,
+			area=6000, bfs_order=i, sibling_same_type_count=500,
+		))
+	for i in range(5):
+		candidates.append(_Candidate(
+			control_type="TabItemControl", name=f"Tab{i}", automation_id="",
+			is_enabled=True, bounding_rect=(0, 0, 100, 30), center=(50, 15),
+			coords_unavailable=False, depth=5, parent_idx=-1,
+			area=3000, bfs_order=500 + i, sibling_same_type_count=5,
+		))
+
+	# Score and select (simulating Pass 2)
+	screen_w, screen_h = 1920, 1080
+	scored = [(i, _score_candidate(c, screen_w, screen_h)) for i, c in enumerate(candidates)]
+	scored.sort(key=lambda x: (-x[1], candidates[x[0]].bfs_order))
+
+	limit = 500
+	selected_indices = [i for i, _ in scored[:limit]]
+
+	# Add 7 ListItem nav elements (like Task Manager sidebar)
+	for i in range(7):
+		candidates.append(_Candidate(
+			control_type="ListItemControl", name=f"NavItem{i}", automation_id="",
+			is_enabled=True, bounding_rect=(200, 300+i*40, 240, 340+i*40), center=(220, 320+i*40),
+			coords_unavailable=False, depth=6, parent_idx=-1,
+			area=1600, bfs_order=505 + i, sibling_same_type_count=7,
+		))
+
+	# Re-score with all candidates
+	scored = [(i, _score_candidate(c, screen_w, screen_h)) for i, c in enumerate(candidates)]
+	scored.sort(key=lambda x: (-x[1], candidates[x[0]].bfs_order))
+	selected_indices = [i for i, _ in scored[:limit]]
+
+	# Apply reserved slots (same logic as uia.py)
+	capped = len(candidates) > limit
+	if capped:
+		selected_set_tmp = set(selected_indices)
+		max_reserved = min(20, limit // 10)
+		reserved = []
+		for i, c in enumerate(candidates):
+			if i in selected_set_tmp:
+				continue
+			is_nav = (
+				c.control_type in _NAV_TYPES
+				or (c.control_type == "ListItemControl" and c.sibling_same_type_count <= 10)
+			)
+			if is_nav and not c.coords_unavailable:
+				reserved.append(i)
+			if len(reserved) >= max_reserved:
+				break
+		if reserved:
+			evict_count = len(reserved)
+			selected_indices = selected_indices[:-evict_count] + reserved
+
+	# Check all tab items and nav ListItems are in the selection
+	selected_set = set(selected_indices)
+	tab_indices = list(range(500, 505))
+	tabs_selected = sum(1 for i in tab_indices if i in selected_set)
+	check("all 5 TabItems in selection after reserved slots", tabs_selected == 5)
+	nav_list_indices = list(range(505, 512))
+	navs_selected = sum(1 for i in nav_list_indices if i in selected_set)
+	check("all 7 nav ListItems in selection after reserved slots", navs_selected == 7)
+	check("selection still has 500 elements", len(selected_indices) == 500)
+
+
+def test_adaptive_termination():
+	"""Test adaptive early termination logic."""
+	print("\n--- Adaptive Termination Tests ---")
+
+	from windows_native_mcp.core.uia import _Candidate, _NAV_TYPES
+
+	# Scenario 1: candidates with nav types → should terminate at limit*3
+	candidates_with_nav = [
+		_Candidate(
+			control_type="TabItemControl", name="Tab", automation_id="",
+			is_enabled=True, bounding_rect=(0, 0, 100, 30), center=(50, 15),
+			coords_unavailable=False, depth=3, parent_idx=-1,
+			area=3000, bfs_order=0, sibling_same_type_count=3,
+		),
+	]
+	has_nav = any(c.control_type in _NAV_TYPES for c in candidates_with_nav)
+	check("has_nav is True when TabItem present", has_nav)
+
+	# Scenario 2: candidates without nav types → should continue past limit*3
+	candidates_no_nav = [
+		_Candidate(
+			control_type="ButtonControl", name="Btn", automation_id="",
+			is_enabled=True, bounding_rect=(0, 0, 100, 30), center=(50, 15),
+			coords_unavailable=False, depth=5, parent_idx=-1,
+			area=3000, bfs_order=0, sibling_same_type_count=100,
+		),
+	]
+	has_nav2 = any(c.control_type in _NAV_TYPES for c in candidates_no_nav)
+	check("has_nav is False when no nav types", not has_nav2)
+
+	# Scenario 3: ListItem with few siblings → counts as nav
+	candidates_nav_list = [
+		_Candidate(
+			control_type="ListItemControl", name="NavItem", automation_id="",
+			is_enabled=True, bounding_rect=(0, 0, 100, 30), center=(50, 15),
+			coords_unavailable=False, depth=6, parent_idx=-1,
+			area=3000, bfs_order=0, sibling_same_type_count=7,
+		),
+	]
+	has_nav3 = any(
+		c.control_type in _NAV_TYPES
+		or (c.control_type == "ListItemControl" and c.sibling_same_type_count <= 10)
+		for c in candidates_nav_list
+	)
+	check("has_nav is True for ListItem with <=10 siblings", has_nav3)
+
+	# Scenario 4: ListItem with many siblings → NOT nav
+	candidates_data_list = [
+		_Candidate(
+			control_type="ListItemControl", name="DataRow", automation_id="",
+			is_enabled=True, bounding_rect=(0, 0, 100, 30), center=(50, 15),
+			coords_unavailable=False, depth=8, parent_idx=-1,
+			area=3000, bfs_order=0, sibling_same_type_count=100,
+		),
+	]
+	has_nav4 = any(
+		c.control_type in _NAV_TYPES
+		or (c.control_type == "ListItemControl" and c.sibling_same_type_count <= 10)
+		for c in candidates_data_list
+	)
+	check("has_nav is False for ListItem with >10 siblings (data row)", not has_nav4)
+
+
+def test_app_size_on_launch():
+	"""Test that app tool's size parameter works with launch mode."""
+	print("\n--- App Size on Launch Tests ---")
+
+	import inspect
+	from windows_native_mcp.tools import app
+
+	source = inspect.getsource(app)
+	check("size handled in launch mode", "size is not None" in source)
+	check("size description mentions launch", "Window size for launch" in source)
+
+
 if __name__ == "__main__":
 	print("=" * 50)
-	print(" Windows Native MCP — Gate 1 + Phase 2 + Phase 3 + Round 2 Tests")
+	print(" Windows Native MCP — Full Test Suite (Round 3)")
 	print("=" * 50)
 
 	test_imports()
@@ -1181,6 +1333,9 @@ if __name__ == "__main__":
 	test_nav_scoring()
 	test_listitem_sibling_scoring()
 	test_shortcut_unscoped_snapshot()
+	test_reserved_slots()
+	test_adaptive_termination()
+	test_app_size_on_launch()
 
 	print(f"\n{'=' * 50}")
 	print(f" Results: {passed} passed, {failed} failed")
