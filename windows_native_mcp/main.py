@@ -15,6 +15,7 @@ mcp = FastMCP(
 		"snapshot=true on action tools to auto-refresh in one call, or call snapshot "
 		"separately. Scope snapshots to the target window for faster, more complete results. "
 		"Only enable screenshot when the UI tree alone is insufficient. "
+		"In address bars with autocomplete, use Ctrl+L to re-focus before typing a path. "
 		"All coordinates are logical pixels on the primary monitor."
 	),
 )

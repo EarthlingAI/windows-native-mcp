@@ -74,7 +74,7 @@ When `screenshot=True`, annotated screenshots are saved to the `outputs/` direct
 
 ## Auto-Snapshot on Action Tools
 
-All action tools (`click`, `type_text`, `scroll`, `shortcut`) accept a `snapshot` parameter (default `false`). When `true`, the tool automatically re-snapshots after the action using the previous snapshot's settings (window, detail level, limit, types, viewport_only), saving a round-trip. A 150ms settling delay allows UI transitions to complete before re-capturing.
+All action tools (`click`, `type_text`, `scroll`, `shortcut`) accept a `snapshot` parameter (default `false`). When `true`, the tool automatically re-snapshots after the action using the previous snapshot's settings (window, detail level, limit, types, viewport_only), saving a round-trip. A 150ms settling delay allows UI transitions to complete before re-capturing. The `shortcut` tool uses a desktop-wide (unscoped) auto-snapshot since shortcuts may change window focus.
 
 ## Scoring System
 
@@ -82,6 +82,7 @@ Elements are ranked by a scoring function that considers:
 - **Area** (log scale) — larger elements score higher
 - **Name quality** — named elements get a bonus; PUA-only names get a penalty
 - **Depth bonus** — shallow elements (depth ≤2: +40, depth ≤5: +20) are prioritized as they're structurally important (navigation, toolbars)
+- **Navigation role boost** — TabItem, MenuItem, TreeItem get +35; ListItem with ≤10 siblings gets +25 (likely navigation, not data)
 - **Sibling repetition penalty** — elements with >20 same-type siblings under the same parent get -30, deprioritizing data rows in large lists
 - **Offscreen/coords_unavailable penalties**
 

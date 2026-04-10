@@ -144,6 +144,18 @@ def run_post_action_snapshot() -> dict:
 	return _execute_snapshot(**params)
 
 
+def run_post_action_snapshot_unscoped() -> dict:
+	"""Run snapshot ignoring previous window scope. For shortcuts that may change focus."""
+	import time
+	params = desktop_state.last_snapshot_params
+	if params is None:
+		params = {"detail": "standard", "window": None, "limit": 500, "types": None, "viewport_only": True}
+	else:
+		params = {**params, "window": None}
+	time.sleep(0.15)  # Brief settling delay for UI transitions
+	return _execute_snapshot(**params)
+
+
 def register(mcp: FastMCP):
 	"""Register the snapshot tool."""
 

@@ -888,7 +888,99 @@ def test_sibling_penalty():
 	s_many = _score_candidate(many_siblings, 1920, 1080)
 
 	check("few siblings > many siblings (>20)", s_few > s_many)
-	check("penalty is 30 points", abs((s_few - s_many) - 30) < 0.01)
+	check("penalty is 30 points", abs((s_few - s_many) - 55) < 0.01)  # 30 penalty + 25 nav boost for few-sibling ListItem
+
+
+def test_nav_scoring():
+	"""Test navigation type scoring boost."""
+	print("\n--- Navigation Scoring Tests ---")
+
+	from windows_native_mcp.core.uia import _score_candidate, _Candidate
+
+	tab_item = _Candidate(
+		control_type="TabItemControl", name="Details", automation_id="",
+		is_enabled=True, bounding_rect=(0, 0, 100, 30), center=(50, 15),
+		coords_unavailable=False, depth=5, parent_idx=-1,
+		area=3000, bfs_order=0, sibling_same_type_count=5,
+	)
+	button = _Candidate(
+		control_type="ButtonControl", name="OK", automation_id="",
+		is_enabled=True, bounding_rect=(0, 0, 100, 30), center=(50, 15),
+		coords_unavailable=False, depth=5, parent_idx=-1,
+		area=3000, bfs_order=1, sibling_same_type_count=5,
+	)
+	menu_item = _Candidate(
+		control_type="MenuItemControl", name="File", automation_id="",
+		is_enabled=True, bounding_rect=(0, 0, 80, 25), center=(40, 12),
+		coords_unavailable=False, depth=3, parent_idx=-1,
+		area=2000, bfs_order=2, sibling_same_type_count=5,
+	)
+	tree_item = _Candidate(
+		control_type="TreeItemControl", name="Documents", automation_id="",
+		is_enabled=True, bounding_rect=(0, 0, 150, 25), center=(75, 12),
+		coords_unavailable=False, depth=4, parent_idx=-1,
+		area=3750, bfs_order=3, sibling_same_type_count=8,
+	)
+
+	s_tab = _score_candidate(tab_item, 1920, 1080)
+	s_btn = _score_candidate(button, 1920, 1080)
+	s_menu = _score_candidate(menu_item, 1920, 1080)
+	s_tree = _score_candidate(tree_item, 1920, 1080)
+
+	check("TabItem > Button (same size/depth)", s_tab > s_btn)
+	check("MenuItemControl gets nav boost", s_menu > 0)
+	check("TreeItemControl > Button", s_tree > s_btn)
+
+
+def test_listitem_sibling_scoring():
+	"""Test ListItem scoring — few siblings = navigation boost, many = no boost."""
+	print("\n--- ListItem Sibling Scoring Tests ---")
+
+	from windows_native_mcp.core.uia import _score_candidate, _Candidate
+
+	nav_list = _Candidate(
+		control_type="ListItemControl", name="Settings", automation_id="",
+		is_enabled=True, bounding_rect=(0, 0, 200, 30), center=(100, 15),
+		coords_unavailable=False, depth=4, parent_idx=0,
+		area=6000, bfs_order=0, sibling_same_type_count=5,
+	)
+	data_list = _Candidate(
+		control_type="ListItemControl", name="Row", automation_id="",
+		is_enabled=True, bounding_rect=(0, 0, 200, 30), center=(100, 15),
+		coords_unavailable=False, depth=4, parent_idx=0,
+		area=6000, bfs_order=1, sibling_same_type_count=15,
+	)
+	bulk_list = _Candidate(
+		control_type="ListItemControl", name="Row", automation_id="",
+		is_enabled=True, bounding_rect=(0, 0, 200, 30), center=(100, 15),
+		coords_unavailable=False, depth=4, parent_idx=0,
+		area=6000, bfs_order=2, sibling_same_type_count=50,
+	)
+
+	s_nav = _score_candidate(nav_list, 1920, 1080)
+	s_data = _score_candidate(data_list, 1920, 1080)
+	s_bulk = _score_candidate(bulk_list, 1920, 1080)
+
+	check("few-sibling ListItem > many-sibling (<=10 vs >10)", s_nav > s_data)
+	check("few-sibling ListItem > bulk ListItem (penalized)", s_nav > s_bulk)
+	check("data ListItem (15) > bulk ListItem (50, penalized)", s_data > s_bulk)
+
+
+def test_shortcut_unscoped_snapshot():
+	"""Test that shortcut tool uses unscoped (desktop-wide) auto-snapshot."""
+	print("\n--- Shortcut Unscoped Snapshot Tests ---")
+
+	import inspect
+	from windows_native_mcp.tools.snapshot import run_post_action_snapshot_unscoped
+	from windows_native_mcp.tools import shortcut
+
+	check("run_post_action_snapshot_unscoped is callable", callable(run_post_action_snapshot_unscoped))
+
+	source = inspect.getsource(run_post_action_snapshot_unscoped)
+	check("unscoped function overrides window to None", '"window": None' in source)
+
+	shortcut_source = inspect.getsource(shortcut)
+	check("shortcut.py imports unscoped version", "run_post_action_snapshot_unscoped" in shortcut_source)
 
 
 def test_snapshot_param_on_actions():
@@ -1047,7 +1139,7 @@ def test_tree_output_no_collapse_single_text():
 
 if __name__ == "__main__":
 	print("=" * 50)
-	print(" Windows Native MCP — Gate 1 + Phase 2 + Phase 3 Tests")
+	print(" Windows Native MCP — Gate 1 + Phase 2 + Phase 3 + Round 2 Tests")
 	print("=" * 50)
 
 	test_imports()
@@ -1086,6 +1178,9 @@ if __name__ == "__main__":
 	test_tree_output_data_collapse()
 	test_tree_output_no_collapse_mixed()
 	test_tree_output_no_collapse_single_text()
+	test_nav_scoring()
+	test_listitem_sibling_scoring()
+	test_shortcut_unscoped_snapshot()
 
 	print(f"\n{'=' * 50}")
 	print(f" Results: {passed} passed, {failed} failed")

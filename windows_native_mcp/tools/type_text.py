@@ -67,6 +67,10 @@ def register(mcp: FastMCP):
 		and SendInput for shorter text. Use method='type' to preserve clipboard.
 		Labels are invalidated after this action. Pass snapshot=True to
 		automatically re-snapshot, or call snapshot separately.
+
+		In address bars with autocomplete, typed text may be intercepted by
+		dropdown suggestions. Use shortcut(keys='ctrl+l') to re-focus the
+		address bar cleanly before retyping.
 		"""
 		scale = desktop_state.scale_factor
 		uipi_warning = desktop_state.uipi_warning(window)

@@ -303,6 +303,8 @@ class _Candidate:
 
 _CONTAINER_TYPES_FULL = {"ToolBarControl", "MenuBarControl", "ScrollBarControl"}
 
+_NAV_TYPES = {"TabItemControl", "MenuItemControl", "TreeItemControl"}
+
 # Control types that need class_name/rect for ghost or tab filtering
 _NEEDS_FILTER_CHECK = {"PaneControl", "WindowControl", "CustomControl", "GroupControl"}
 
@@ -348,6 +350,14 @@ def _score_candidate(c: _Candidate, screen_w: int, screen_h: int) -> float:
 	# Sibling repetition penalty: data rows in large lists
 	if c.sibling_same_type_count > 20:
 		score -= 30
+
+	# Navigation role boost: tabs, menus, tree items are structurally important
+	if c.control_type in _NAV_TYPES:
+		score += 35
+
+	# Few-sibling ListItem is likely navigation, not data
+	if c.control_type == "ListItemControl" and c.sibling_same_type_count <= 10:
+		score += 25
 
 	return score
 
