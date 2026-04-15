@@ -54,6 +54,17 @@ def register(mcp: FastMCP):
 			bool,
 			Field(description="Auto-refresh UI tree after this action using previous snapshot settings. Set false to skip."),
 		] = True,
+		delay: Annotated[
+			float,
+			Field(
+				ge=0, le=10.0,
+				description="Seconds to wait after action before auto-snapshot. "
+				"Default 0.15s handles most UI updates. Only increase when you know "
+				"the action triggers a slow transition: 0.3-0.5 for menus/dropdowns, "
+				"1.0 for dialogs, 2.0+ for app launches or page navigation. "
+				"Use 0 to skip the wait entirely."
+			),
+		] = 0.15,
 	) -> dict:
 		"""Click, double-click, right-click, hover, or drag at a target.
 
@@ -100,5 +111,5 @@ def register(mcp: FastMCP):
 		if uipi_warning:
 			result["warning"] = uipi_warning
 		if snapshot:
-			result["snapshot"] = run_post_action_snapshot()
+			result["snapshot"] = run_post_action_snapshot(delay=delay)
 		return result

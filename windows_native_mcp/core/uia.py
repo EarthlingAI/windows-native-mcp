@@ -99,6 +99,7 @@ def get_desktop_elements(
 	type_filter: set[str] | None = None,
 	screen_size: tuple[int, int] = (1920, 1080),
 	viewport_only: bool = True,
+	screen_origin: tuple[int, int] = (0, 0),
 ) -> tuple[dict[str, ElementInfo], dict]:
 	"""Walk the UI tree and return discovered elements with metadata.
 
@@ -109,6 +110,7 @@ def get_desktop_elements(
 		limit: Max elements for standard mode (scored ranking).
 		type_filter: Override interactive types for standard mode.
 		screen_size: Screen dimensions for scoring offscreen elements.
+		screen_origin: Top-left of active monitor in logical pixels (for scoring).
 
 	Returns:
 		Tuple of (elements_dict keyed by sequential label, metadata_dict).
@@ -162,6 +164,7 @@ def get_desktop_elements(
 			elements, ghost_filtered, coords_unavailable, capped, total_candidates, viewport_filtered, cache_used = _walk_and_rank(
 				root, scale_factor, limit=limit, type_filter=type_filter,
 				screen_size=screen_size, viewport_rect=viewport_rect,
+				screen_origin=screen_origin,
 			)
 		except OverflowError:
 			logging.warning("UIA: OverflowError during standard walk — returning partial results")
@@ -317,7 +320,7 @@ def _is_pua_only(name: str) -> bool:
 	return all(0xE000 <= ord(c) <= 0xF8FF or 0xF0000 <= ord(c) <= 0x10FFFF for c in stripped)
 
 
-def _score_candidate(c: _Candidate, screen_w: int, screen_h: int) -> float:
+def _score_candidate(c: _Candidate, screen_w: int, screen_h: int, screen_origin: tuple[int, int] = (0, 0)) -> float:
 	"""Score a candidate element for ranking. Higher = more important."""
 	# Area (log scale so giant text areas don't dominate)
 	score = math.log2(max(c.area, 1) + 1) * 10  # ~200 for 9.4M, ~100 for 1000, ~0 for 0
@@ -333,8 +336,12 @@ def _score_candidate(c: _Candidate, screen_w: int, screen_h: int) -> float:
 	if not c.name.strip() and c.control_type in _CONTAINER_TYPES_FULL:
 		score -= 40
 
-	# Offscreen penalty
-	if c.center[0] < 0 or c.center[1] < 0 or c.center[0] > screen_w or c.center[1] > screen_h:
+	# Offscreen penalty (monitor-relative bounds via screen_origin)
+	screen_left, screen_top = screen_origin
+	screen_right = screen_left + screen_w
+	screen_bottom = screen_top + screen_h
+	if (c.center[0] < screen_left or c.center[1] < screen_top
+			or c.center[0] > screen_right or c.center[1] > screen_bottom):
 		score -= 100
 
 	# Coords unavailable penalty
@@ -370,6 +377,7 @@ def _walk_and_rank(
 	screen_size: tuple[int, int] = (1920, 1080),
 	max_depth: int = 50,
 	viewport_rect: tuple[int, int, int, int] | None = None,
+	screen_origin: tuple[int, int] = (0, 0),
 ) -> tuple[dict[str, ElementInfo], int, int, bool, int, int, bool]:
 	"""Standard mode: two-pass BFS walk with scoring and ranking.
 
@@ -603,7 +611,7 @@ def _walk_and_rank(
 	capped = len(candidates) > limit
 
 	screen_w, screen_h = screen_size
-	scored = [(i, _score_candidate(c, screen_w, screen_h)) for i, c in enumerate(candidates)]
+	scored = [(i, _score_candidate(c, screen_w, screen_h, screen_origin)) for i, c in enumerate(candidates)]
 	scored.sort(key=lambda x: (-x[1], candidates[x[0]].bfs_order))
 	selected_indices = [i for i, _ in scored[:limit]]
 

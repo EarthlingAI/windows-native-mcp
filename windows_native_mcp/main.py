@@ -15,7 +15,7 @@ mcp = FastMCP(
 		"(pass snapshot=false to skip). Scope snapshots to the target window for faster, "
 		"more complete results. Only enable screenshot when the UI tree alone is insufficient. "
 		"In address bars with autocomplete, use Ctrl+L to re-focus before typing a path. "
-		"All coordinates are logical pixels on the primary monitor."
+		"All coordinates are logical pixels. Use the monitor parameter to work on different displays."
 	),
 )
 

@@ -47,6 +47,8 @@ class DesktopState:
 	last_element_count: int = -1         # Elements found in last snapshot (-1 = no snapshot yet)
 	last_snapshot_params: dict | None = None  # Params from last snapshot (for auto-snapshot replay)
 	is_admin: bool = field(default_factory=_check_admin)  # Cached at startup
+	active_monitor: object | None = None   # MonitorInfo from last snapshot
+	monitors: list = field(default_factory=list)  # list[MonitorInfo] from last enumeration
 
 	def uipi_warning(self, window: str | None = None) -> str | None:
 		"""Return a warning string if the last snapshot suggests UIPI issues, else None.

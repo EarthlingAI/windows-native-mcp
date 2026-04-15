@@ -22,6 +22,11 @@ from windows_native_mcp.core.screen import (
 	crop_to_rect,
 	crop_region,
 	draw_grid_overlay,
+	enumerate_monitors,
+	get_primary_monitor,
+	get_monitor_by_index,
+	get_monitor_for_window,
+	MonitorInfo,
 )
 from windows_native_mcp.core.uia import get_desktop_elements
 
@@ -100,10 +105,21 @@ def _execute_snapshot(
 	types: list[str] | None = None,
 	viewport_only: bool = True,
 	include_rects: bool = False,
+	scale_factor: float | None = None,
+	screen_size: tuple[int, int] | None = None,
+	screen_origin: tuple[int, int] = (0, 0),
 ) -> dict:
-	"""Core snapshot logic (no screenshot). Used by snapshot tool and post-action auto-snapshot."""
-	scale_factor = get_dpi_scale()
-	screen_size = get_screen_size()
+	"""Core snapshot logic (no screenshot). Used by snapshot tool and post-action auto-snapshot.
+
+	Args:
+		scale_factor: DPI scale override. None = use primary monitor.
+		screen_size: Screen dimensions override. None = use primary monitor.
+		screen_origin: Top-left of active monitor in logical pixels (for scoring).
+	"""
+	if scale_factor is None:
+		scale_factor = get_dpi_scale()
+	if screen_size is None:
+		screen_size = get_screen_size()
 	type_filter = set(t + "Control" for t in types) if types else None
 
 	elements, metadata = get_desktop_elements(
@@ -114,6 +130,7 @@ def _execute_snapshot(
 		type_filter=type_filter,
 		screen_size=screen_size,
 		viewport_only=viewport_only,
+		screen_origin=screen_origin,
 	)
 
 	desktop_state.elements = elements
@@ -123,10 +140,6 @@ def _execute_snapshot(
 	desktop_state.window_name = window
 	desktop_state.window_handle = metadata.get("window_handle")
 	desktop_state.last_element_count = len(elements)
-	desktop_state.last_snapshot_params = {
-		"detail": detail, "window": window, "limit": limit,
-		"types": types, "viewport_only": viewport_only,
-	}
 
 	metadata["scale_factor"] = scale_factor
 	metadata["screen_size"] = list(screen_size)
@@ -134,26 +147,214 @@ def _execute_snapshot(
 	return {"metadata": metadata, "elements": elements_tree}
 
 
-def run_post_action_snapshot() -> dict:
-	"""Run snapshot using last snapshot params. For post-action auto-refresh."""
+def _capture_annotated_screenshot(
+	metadata: dict,
+	grid: str = "rulers",
+	grid_interval: int | str = "auto",
+	crop: list[int] | None = None,
+	monitor_info: MonitorInfo | None = None,
+) -> tuple[bytes, str]:
+	"""Capture, annotate, crop, and grid-overlay a screenshot.
+
+	Returns (png_bytes, screenshot_path_str).
+	"""
+	scale_factor = desktop_state.scale_factor
+
+	# Determine monitor origin for coordinate mapping
+	if monitor_info is not None:
+		monitor_origin = (monitor_info.rect[0], monitor_info.rect[1])
+	else:
+		monitor_origin = (0, 0)
+
+	# Capture screenshot (includes cursor compositing)
+	img = capture_screenshot(monitor_info)
+
+	# Annotate with element labels
+	annotated = annotate_screenshot(img, desktop_state.elements, scale_factor, monitor_origin)
+
+	# Determine crop and track origin for grid coordinate labels
+	window_handle = metadata.get("window_handle")
+	crop_origin = monitor_origin
+
+	if crop is not None:
+		# User crop takes precedence over window auto-crop
+		if len(crop) != 4:
+			raise ToolError("crop must be [left, top, right, bottom] with 4 values")
+		annotated = crop_region(annotated, tuple(crop), scale_factor, monitor_origin)
+		crop_origin = (crop[0], crop[1])
+	elif window_handle and not metadata.get("window_minimized"):
+		win_rect = get_window_rect(window_handle)
+		if win_rect:
+			# win_rect is in absolute physical coords on the virtual desktop.
+			# Offset by monitor's physical origin so it's relative to the captured image.
+			if monitor_info:
+				phys_origin_x = int(monitor_info.rect[0] * scale_factor)
+				phys_origin_y = int(monitor_info.rect[1] * scale_factor)
+				win_rect = (
+					win_rect[0] - phys_origin_x, win_rect[1] - phys_origin_y,
+					win_rect[2] - phys_origin_x, win_rect[3] - phys_origin_y,
+				)
+			annotated = crop_to_rect(annotated, win_rect)
+			# crop_origin in logical coords for grid labels (absolute screen coords)
+			crop_origin = (
+				int(win_rect[0] / scale_factor) + monitor_origin[0],
+				int(win_rect[1] / scale_factor) + monitor_origin[1],
+			)
+
+	# Draw grid overlay (no-op if grid="off")
+	if grid != "off":
+		annotated = draw_grid_overlay(annotated, grid, grid_interval, scale_factor, crop_origin)
+
+	png_bytes = screenshot_to_bytes(annotated)
+
+	# Save annotated screenshot to outputs/ for external viewing
+	outputs_dir = Path(__file__).resolve().parent.parent.parent / "outputs"
+	outputs_dir.mkdir(exist_ok=True)
+	timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+	screenshot_path = outputs_dir / f"snapshot_{timestamp}.png"
+	screenshot_path.write_bytes(png_bytes)
+	logging.info(f"Screenshot saved to {screenshot_path}")
+
+	return (png_bytes, str(screenshot_path))
+
+
+def run_post_action_snapshot(delay: float = 0.15) -> dict:
+	"""Run snapshot using last snapshot params. For post-action auto-refresh.
+
+	Replays ALL params from the last explicit snapshot() call, including
+	screenshot, grid, crop, and monitor settings. Always returns a dict
+	(action tools need consistent return types). Screenshots are saved to
+	disk and the path is included in metadata.
+	"""
 	import time
+	time.sleep(delay)
+
 	params = desktop_state.last_snapshot_params
 	if params is None:
-		params = {"detail": "standard", "window": None, "limit": 500, "types": None, "viewport_only": True}
-	time.sleep(0.15)  # Brief settling delay for UI transitions
-	return _execute_snapshot(**params)
+		params = {
+			"detail": "standard", "window": None, "limit": 500,
+			"types": None, "viewport_only": True, "include_rects": False,
+			"screenshot": False, "grid": "rulers", "grid_interval": "auto",
+			"crop": None, "monitor": None,
+		}
+
+	# Split into tree params and screenshot params
+	tree_params = {
+		"detail": params.get("detail", "standard"),
+		"window": params.get("window"),
+		"limit": params.get("limit", 500),
+		"types": params.get("types"),
+		"viewport_only": params.get("viewport_only", True),
+		"include_rects": params.get("include_rects", False),
+	}
+
+	# Resolve monitor for tree collection
+	monitor_param = params.get("monitor")
+	active_monitor = _resolve_monitor(monitor_param, tree_params["window"])
+
+	if active_monitor:
+		tree_params["scale_factor"] = active_monitor.dpi_scale
+		tree_params["screen_size"] = (active_monitor.width, active_monitor.height)
+		tree_params["screen_origin"] = (active_monitor.rect[0], active_monitor.rect[1])
+
+	desktop_state.active_monitor = active_monitor
+	result = _execute_snapshot(**tree_params)
+
+	screenshot = params.get("screenshot", False)
+	if not screenshot:
+		return result
+
+	# Replay screenshot pipeline — save to disk, include path in metadata
+	_png_bytes, screenshot_path = _capture_annotated_screenshot(
+		metadata=result["metadata"],
+		grid=params.get("grid", "rulers"),
+		grid_interval=params.get("grid_interval", "auto"),
+		crop=params.get("crop"),
+		monitor_info=active_monitor,
+	)
+
+	result["metadata"]["screenshot_path"] = screenshot_path
+	return result
 
 
-def run_post_action_snapshot_unscoped() -> dict:
+def run_post_action_snapshot_unscoped(delay: float = 0.15) -> dict:
 	"""Run snapshot ignoring previous window scope. For shortcuts that may change focus."""
 	import time
+	time.sleep(delay)
+
 	params = desktop_state.last_snapshot_params
 	if params is None:
-		params = {"detail": "standard", "window": None, "limit": 500, "types": None, "viewport_only": True}
+		params = {
+			"detail": "standard", "window": None, "limit": 500,
+			"types": None, "viewport_only": True, "include_rects": False,
+			"screenshot": False, "grid": "rulers", "grid_interval": "auto",
+			"crop": None, "monitor": None,
+		}
 	else:
 		params = {**params, "window": None}
-	time.sleep(0.15)  # Brief settling delay for UI transitions
-	return _execute_snapshot(**params)
+
+	# Split into tree params and screenshot params
+	tree_params = {
+		"detail": params.get("detail", "standard"),
+		"window": None,
+		"limit": params.get("limit", 500),
+		"types": params.get("types"),
+		"viewport_only": params.get("viewport_only", True),
+		"include_rects": params.get("include_rects", False),
+	}
+
+	# Resolve monitor (no window to auto-detect from)
+	monitor_param = params.get("monitor")
+	active_monitor = _resolve_monitor(monitor_param, None)
+
+	if active_monitor:
+		tree_params["scale_factor"] = active_monitor.dpi_scale
+		tree_params["screen_size"] = (active_monitor.width, active_monitor.height)
+		tree_params["screen_origin"] = (active_monitor.rect[0], active_monitor.rect[1])
+
+	desktop_state.active_monitor = active_monitor
+	result = _execute_snapshot(**tree_params)
+
+	screenshot = params.get("screenshot", False)
+	if not screenshot:
+		return result
+
+	# Replay screenshot pipeline — save to disk, include path in metadata
+	_png_bytes, screenshot_path = _capture_annotated_screenshot(
+		metadata=result["metadata"],
+		grid=params.get("grid", "rulers"),
+		grid_interval=params.get("grid_interval", "auto"),
+		crop=params.get("crop"),
+		monitor_info=active_monitor,
+	)
+
+	result["metadata"]["screenshot_path"] = screenshot_path
+	return result
+
+
+def _resolve_monitor(
+	monitor_param: int | str | None,
+	window: str | None,
+) -> MonitorInfo | None:
+	"""Resolve a monitor parameter to a MonitorInfo.
+
+	Returns None for "all" (full virtual desktop) or when defaulting to primary.
+	"""
+	if monitor_param == "all":
+		return None  # Full virtual desktop
+
+	monitors = enumerate_monitors()
+	desktop_state.monitors = monitors
+
+	if isinstance(monitor_param, int):
+		return get_monitor_by_index(monitor_param, monitors)
+
+	# Auto-detect from window if available
+	if window and desktop_state.window_handle:
+		return get_monitor_for_window(desktop_state.window_handle, monitors)
+
+	# Default: primary monitor
+	return get_primary_monitor()
 
 
 def register(mcp: FastMCP):
@@ -211,6 +412,14 @@ def register(mcp: FastMCP):
 			list[int] | None,
 			Field(description="Crop to region [left, top, right, bottom] in absolute screen coordinates (logical pixels). Coordinates must be within the target window's screen position. Overrides window auto-crop"),
 		] = None,
+		monitor: Annotated[
+			int | str | None,
+			Field(
+				description="Monitor to capture: 1 for primary, 2+ for others, "
+				"'all' for full virtual desktop. Auto-detected from window when scoped. "
+				"Omit for primary monitor."
+			),
+		] = None,
 	) -> list | dict:
 		"""Capture current desktop state as a UI element tree with numbered labels.
 
@@ -225,66 +434,90 @@ def register(mcp: FastMCP):
 		Elements marked coords_unavailable (common in UWP apps) cannot use label
 		targeting — use [x, y] coordinates from the screenshot instead.
 		When window-scoped, screenshot is auto-cropped to the window bounds.
-		Otherwise, screenshot captures the primary monitor.
 
 		Use crop to zoom into a specific region (auto-enables screenshot).
+		Use monitor to work on different displays.
 		"""
 		# Auto-enable screenshot when crop is requested (crop is meaningless without screenshot)
 		if crop is not None:
 			screenshot = True
 
-		logging.info(f"Snapshot: detail={detail}, window={window}, screenshot={screenshot}, limit={limit}, types={types}")
+		logging.info(f"Snapshot: detail={detail}, window={window}, screenshot={screenshot}, limit={limit}, types={types}, monitor={monitor}")
 
-		# Core element collection + state update
-		result = _execute_snapshot(
-			detail=detail, window=window, limit=limit,
-			types=types, viewport_only=viewport_only,
-			include_rects=include_rects,
-		)
+		# Enumerate monitors and resolve active monitor
+		monitors = enumerate_monitors()
+		desktop_state.monitors = monitors
+
+		# Core element collection + state update (needs window resolved first for handle)
+		tree_params = {
+			"detail": detail, "window": window, "limit": limit,
+			"types": types, "viewport_only": viewport_only,
+			"include_rects": include_rects,
+		}
+
+		# First pass: collect elements to get window_handle for monitor auto-detection
+		result = _execute_snapshot(**tree_params)
+
+		# Now resolve monitor (may need window_handle from _execute_snapshot)
+		if monitor == "all":
+			active_monitor = None
+		elif isinstance(monitor, int):
+			active_monitor = get_monitor_by_index(monitor, monitors)
+		elif window and desktop_state.window_handle:
+			active_monitor = get_monitor_for_window(desktop_state.window_handle, monitors)
+		else:
+			active_monitor = get_primary_monitor()
+
+		desktop_state.active_monitor = active_monitor
+
+		# Re-run element collection with correct monitor DPI/size/origin if non-primary
+		if active_monitor:
+			mon_origin = (active_monitor.rect[0], active_monitor.rect[1])
+			needs_rerun = (
+				active_monitor.dpi_scale != desktop_state.scale_factor
+				or (active_monitor.width, active_monitor.height) != desktop_state.screen_size
+				or mon_origin != (0, 0)
+			)
+			if needs_rerun:
+				tree_params["scale_factor"] = active_monitor.dpi_scale
+				tree_params["screen_size"] = (active_monitor.width, active_monitor.height)
+				tree_params["screen_origin"] = mon_origin
+				result = _execute_snapshot(**tree_params)
+
+		# Store ALL params for auto-snapshot replay (after _execute_snapshot so window_handle is set)
+		desktop_state.last_snapshot_params = {
+			"detail": detail, "window": window, "limit": limit,
+			"types": types, "viewport_only": viewport_only,
+			"include_rects": include_rects,
+			"screenshot": screenshot, "grid": grid,
+			"grid_interval": grid_interval, "crop": crop,
+			"monitor": monitor,
+		}
+
+		# Add monitor metadata
+		metadata = result["metadata"]
+		metadata["monitors"] = [
+			{"index": m.index, "rect": list(m.rect), "primary": m.primary}
+			for m in monitors
+		]
+		metadata["active_monitor"] = active_monitor.index if active_monitor else "all"
 
 		if not screenshot:
 			return result
 
-		metadata = result["metadata"]
 		elements_tree = result["elements"]
 
-		# Capture and annotate screenshot
-		img = capture_screenshot()
-		scale_factor = desktop_state.scale_factor
-		annotated = annotate_screenshot(img, desktop_state.elements, scale_factor)
-
-		# Determine crop and track origin for grid coordinate labels
-		window_handle = metadata.get("window_handle")
-		crop_origin = (0, 0)
-
-		if crop is not None:
-			# User crop takes precedence over window auto-crop
-			if len(crop) != 4:
-				raise ToolError("crop must be [left, top, right, bottom] with 4 values")
-			annotated = crop_region(annotated, tuple(crop), scale_factor)
-			crop_origin = (crop[0], crop[1])
-		elif window_handle and not metadata.get("window_minimized"):
-			win_rect = get_window_rect(window_handle)
-			if win_rect:
-				annotated = crop_to_rect(annotated, win_rect)
-				crop_origin = (int(win_rect[0] / scale_factor), int(win_rect[1] / scale_factor))
-
-		# Draw grid overlay (no-op if grid="off")
-		if grid != "off":
-			annotated = draw_grid_overlay(annotated, grid, grid_interval, scale_factor, crop_origin)
-
-		png_bytes = screenshot_to_bytes(annotated)
-
-		# Save annotated screenshot to outputs/ for external viewing
-		outputs_dir = Path(__file__).resolve().parent.parent.parent / "outputs"
-		outputs_dir.mkdir(exist_ok=True)
-		timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-		screenshot_path = outputs_dir / f"snapshot_{timestamp}.png"
-		screenshot_path.write_bytes(png_bytes)
-		logging.info(f"Screenshot saved to {screenshot_path}")
+		# Capture annotated screenshot via shared pipeline
+		png_bytes, screenshot_path = _capture_annotated_screenshot(
+			metadata=metadata,
+			grid=grid,
+			grid_interval=grid_interval,
+			crop=crop,
+			monitor_info=active_monitor,
+		)
 
 		text_content = json.dumps({
-			"metadata": {**metadata, "screenshot_path": str(screenshot_path)},
+			"metadata": {**metadata, "screenshot_path": screenshot_path},
 			"elements": elements_tree,
 		}, indent=None, separators=(",", ":"))
 

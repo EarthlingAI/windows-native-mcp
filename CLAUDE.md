@@ -38,6 +38,10 @@ These must remain true across all changes:
 5. **`resolve_target` handles string-encoded coordinate lists** — Pydantic union coercion converts `[x, y]` to `"[x, y]"` for `str | list[int] | None` params. The fallback JSON parse in `resolve_target` catches this for all tools.
 6. **Navigation heuristic: `_NAV_TYPES` + ListItem sibling count** — TabItem/MenuItem/TreeItem are always nav. ListItem with ≤10 same-type siblings = nav, >10 = data. This drives both reserved slots and adaptive termination.
 7. **`shortcut` uses `run_post_action_snapshot_unscoped()`** — desktop-wide snapshot since shortcuts may change focus. All other action tools use `run_post_action_snapshot()` (window-scoped).
+8. **Auto-snapshot replays ALL stored params** from last explicit `snapshot()` — including `screenshot`, `grid`, `grid_interval`, `crop`, `monitor`. If agent was in screenshot mode, auto-snapshot stays in screenshot mode.
+9. **Cursor is always composited onto screenshots** — no parameter, no toggle. Uses Win32 `GetCursorInfo` with synthetic green arrow fallback.
+10. **Mouse input always uses `MOUSEEVENTF_VIRTUALDESK`** — coordinates map to full virtual desktop (all monitors), not just primary.
+11. **`_score_candidate` offscreen check uses monitor-relative bounds** via `screen_origin` parameter — elements on secondary monitors are scored correctly when that monitor is active.
 
 ## Conventions
 
@@ -49,7 +53,9 @@ These must remain true across all changes:
 - **`logging.info()`** directly (not `getLogger(__name__)`) with tab-indented hierarchy
 - **All 4 tool annotations set explicitly** (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `openWorldHint`)
 - **All coordinates are logical pixels** — multiply by `scale_factor` for physical pixels. DPI handling lives in `core/screen.py`
-- **No pywin32/comtypes** — ctypes only for Win32 API calls
+- **`MonitorInfo`** is the canonical monitor representation — used by `capture_screenshot()`, `annotate_screenshot()`, `_score_candidate()`, and stored in `desktop_state`
+- **`capture_screenshot()` always composites cursor** before returning — downstream consumers get cursor "for free"
+- **No pywin32/comtypes** — ctypes only for Win32 API calls (exception: `cached_walk.py` uses comtypes for UIA CacheRequest)
 
 ## Adding a New Tool
 

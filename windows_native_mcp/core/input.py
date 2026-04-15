@@ -23,6 +23,7 @@ MOUSEEVENTF_MIDDLEUP = 0x0040
 MOUSEEVENTF_WHEEL = 0x0800
 MOUSEEVENTF_HWHEEL = 0x1000
 MOUSEEVENTF_ABSOLUTE = 0x8000
+MOUSEEVENTF_VIRTUALDESK = 0x4000
 
 KEYEVENTF_KEYUP = 0x0002
 KEYEVENTF_UNICODE = 0x0004
@@ -208,32 +209,40 @@ def _make_key_input(vk: int = 0, scan: int = 0, flags: int = 0) -> INPUT:
 	return inp
 
 
-def _get_physical_screen_size() -> tuple[int, int]:
-	"""Get primary screen size in physical pixels.
+def _get_virtual_screen() -> tuple[int, int, int, int]:
+	"""Get virtual screen bounds (all monitors) in physical pixels.
 
-	With per-monitor DPI awareness (level 2), GetSystemMetrics returns
-	physical pixel dimensions.
+	Returns (left, top, width, height). With per-monitor DPI awareness,
+	GetSystemMetrics returns physical pixel dimensions for the virtual screen.
 	"""
+	SM_XVIRTUALSCREEN = 76
+	SM_YVIRTUALSCREEN = 77
+	SM_CXVIRTUALSCREEN = 78
+	SM_CYVIRTUALSCREEN = 79
 	try:
-		w = ctypes.windll.user32.GetSystemMetrics(SM_CXSCREEN)
-		h = ctypes.windll.user32.GetSystemMetrics(SM_CYSCREEN)
+		left = ctypes.windll.user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
+		top = ctypes.windll.user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
+		w = ctypes.windll.user32.GetSystemMetrics(SM_CXVIRTUALSCREEN)
+		h = ctypes.windll.user32.GetSystemMetrics(SM_CYVIRTUALSCREEN)
 		if w > 0 and h > 0:
-			return (w, h)
+			return (left, top, w, h)
 	except (AttributeError, OSError, OverflowError):
 		pass
-	return (1920, 1080)
+	return (0, 0, 1920, 1080)
 
 
 def _to_absolute(x: int, y: int, scale_factor: float) -> tuple[int, int]:
-	"""Convert logical coordinates to SendInput absolute coords (0-65535).
+	"""Convert logical coordinates to SendInput absolute coords (0-65535) on the virtual desktop.
 
-	Logical coords are multiplied by scale_factor to get physical pixels,
-	then mapped to the 0-65536 range that MOUSEEVENTF_ABSOLUTE expects.
+	Uses MOUSEEVENTF_VIRTUALDESK mapping — coordinates span the entire
+	virtual desktop (all monitors), not just the primary.
 	"""
-	phys_w, phys_h = _get_physical_screen_size()
+	virt_left, virt_top, virt_w, virt_h = _get_virtual_screen()
 	try:
-		abs_x = int(x * scale_factor * 65536 / phys_w)
-		abs_y = int(y * scale_factor * 65536 / phys_h)
+		phys_x = x * scale_factor
+		phys_y = y * scale_factor
+		abs_x = int((phys_x - virt_left) * 65536 / virt_w)
+		abs_y = int((phys_y - virt_top) * 65536 / virt_h)
 		return (abs_x, abs_y)
 	except (OverflowError, ValueError):
 		return (32768, 32768)
@@ -247,7 +256,7 @@ def mouse_move(x: int, y: int, scale_factor: float = 1.0) -> None:
 	inp = _make_mouse_input(
 		dx=abs_x,
 		dy=abs_y,
-		flags=MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE,
+		flags=MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
 	)
 	_send_inputs(inp)
 	logging.info("Mouse move to (%d, %d)", x, y)
@@ -280,7 +289,7 @@ def mouse_click(
 	move = _make_mouse_input(
 		dx=abs_x,
 		dy=abs_y,
-		flags=MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE,
+		flags=MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
 	)
 
 	if clicks == 0:
@@ -323,7 +332,7 @@ def mouse_drag(
 	# Move to start position
 	_send_inputs(_make_mouse_input(
 		dx=abs_x1, dy=abs_y1,
-		flags=MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE,
+		flags=MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
 	))
 	time.sleep(0.05)
 
@@ -334,7 +343,7 @@ def mouse_drag(
 	# Move to end position
 	_send_inputs(_make_mouse_input(
 		dx=abs_x2, dy=abs_y2,
-		flags=MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE,
+		flags=MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK,
 	))
 	time.sleep(0.05)
 
