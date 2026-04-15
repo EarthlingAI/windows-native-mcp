@@ -8,7 +8,7 @@ from pydantic import Field
 
 from windows_native_mcp.core.state import desktop_state
 from windows_native_mcp.core.input import key_combo
-from windows_native_mcp.tools.snapshot import run_post_action_snapshot_unscoped
+from windows_native_mcp.tools.snapshot import run_post_action_snapshot
 
 
 def register(mcp: FastMCP):
@@ -52,8 +52,8 @@ def register(mcp: FastMCP):
 
 		Supports modifier combos (ctrl, shift, alt, win) and named keys
 		(enter, tab, escape, f1-f12, etc.). Labels are invalidated and
-		auto-refreshed after execution. Auto-snapshot is desktop-wide
-		(ignores previous window scope, since shortcuts may change focus).
+		auto-refreshed after execution. Auto-focuses the window from the
+		last scoped snapshot.
 		"""
 		uipi_warning = desktop_state.uipi_warning()
 
@@ -69,5 +69,5 @@ def register(mcp: FastMCP):
 		if uipi_warning:
 			result["warning"] = uipi_warning
 		if snapshot:
-			result["snapshot"] = run_post_action_snapshot_unscoped(delay=delay)
+			result["snapshot"] = run_post_action_snapshot(delay=delay)
 		return result

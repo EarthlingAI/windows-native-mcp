@@ -378,7 +378,7 @@ def register(mcp: FastMCP):
 		] = "standard",
 		window: Annotated[
 			str | None,
-			Field(description="Window name to scope snapshot to (exact match, then substring)"),
+			Field(description="Window name to scope snapshot to (exact match, then substring). Modal dialogs (File Open, Save As, Print) are children of their parent window — scope to the parent app, not the dialog title"),
 		] = None,
 		screenshot: Annotated[
 			bool,

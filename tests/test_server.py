@@ -966,21 +966,19 @@ def test_listitem_sibling_scoring():
 	check("data ListItem (15) > bulk ListItem (50, penalized)", s_data > s_bulk)
 
 
-def test_shortcut_unscoped_snapshot():
-	"""Test that shortcut tool uses unscoped (desktop-wide) auto-snapshot."""
-	print("\n--- Shortcut Unscoped Snapshot Tests ---")
+def test_shortcut_scoped_snapshot():
+	"""Test that shortcut tool uses scoped (window-aware) auto-snapshot."""
+	print("\n--- Shortcut Scoped Snapshot Tests ---")
 
 	import inspect
-	from windows_native_mcp.tools.snapshot import run_post_action_snapshot_unscoped
+	from windows_native_mcp.tools.snapshot import run_post_action_snapshot
 	from windows_native_mcp.tools import shortcut
 
-	check("run_post_action_snapshot_unscoped is callable", callable(run_post_action_snapshot_unscoped))
-
-	source = inspect.getsource(run_post_action_snapshot_unscoped)
-	check("unscoped function overrides window to None", '"window": None' in source)
+	check("run_post_action_snapshot is callable", callable(run_post_action_snapshot))
 
 	shortcut_source = inspect.getsource(shortcut)
-	check("shortcut.py imports unscoped version", "run_post_action_snapshot_unscoped" in shortcut_source)
+	check("shortcut.py imports scoped version", "run_post_action_snapshot" in shortcut_source)
+	check("shortcut.py does NOT import unscoped version", "run_post_action_snapshot_unscoped" not in shortcut_source)
 
 
 def test_snapshot_param_on_actions():
@@ -1033,10 +1031,8 @@ def test_execute_snapshot_helper():
 	check("result has elements", "elements" in result)
 	check("elements is list", isinstance(result["elements"], list))
 	check("state not stale after execute", desktop_state.is_stale is False)
-	check("last_snapshot_params stored", desktop_state.last_snapshot_params is not None)
-	params = desktop_state.last_snapshot_params
-	check("params has detail", params["detail"] == "standard")
-	check("params has limit", params["limit"] == 500)
+	# Note: _execute_snapshot is a pure tree-collection function.
+	# last_snapshot_params is set by the snapshot tool handler, not _execute_snapshot.
 
 
 def test_tree_output_data_collapse():
@@ -1396,7 +1392,7 @@ if __name__ == "__main__":
 	test_tree_output_no_collapse_single_text()
 	test_nav_scoring()
 	test_listitem_sibling_scoring()
-	test_shortcut_unscoped_snapshot()
+	test_shortcut_scoped_snapshot()
 	test_reserved_slots()
 	test_adaptive_termination()
 	test_app_size_on_launch()

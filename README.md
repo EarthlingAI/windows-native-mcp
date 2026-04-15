@@ -10,7 +10,7 @@ MCP server for Windows 11+ desktop automation. Provides 6 tools for screenshot c
 | `click` | Mouse click/hover/drag via SendInput. Auto-refreshes element labels after action (default). Auto-focuses window from last scoped snapshot. Configurable `delay` for settling |
 | `type_text` | Text input via SendInput or clipboard paste. Auto-refreshes after action (default). Configurable `delay` |
 | `scroll` | Mouse wheel via SendInput. Auto-refreshes after action (default). Configurable `delay` |
-| `shortcut` | Keyboard combos via SendInput. Auto-refreshes after action (default, desktop-wide). Configurable `delay` |
+| `shortcut` | Keyboard combos via SendInput. Auto-refreshes after action (default). Configurable `delay` |
 | `app` | Window launch (incl. UWP)/switch/resize/close/list-open/list-installed/restore |
 
 ## Setup
@@ -97,7 +97,7 @@ When `screenshot=True`, annotated screenshots are saved to the `outputs/` direct
 
 ## Auto-Snapshot on Action Tools
 
-All action tools (`click`, `type_text`, `scroll`, `shortcut`) accept `snapshot` (default `true`) and `delay` parameters. After the action, the tool waits `delay` seconds (default 0.15s) then re-snapshots using ALL settings from the last explicit `snapshot()` call — including `screenshot`, `grid`, `grid_interval`, `crop`, and `monitor`. This means if the agent entered "screenshot mode", auto-snapshots also include screenshots. Pass `snapshot=false` to skip. The `shortcut` tool uses a desktop-wide (unscoped) auto-snapshot since shortcuts may change window focus.
+All action tools (`click`, `type_text`, `scroll`, `shortcut`) accept `snapshot` (default `true`) and `delay` parameters. After the action, the tool waits `delay` seconds (default 0.15s) then re-snapshots using ALL settings from the last explicit `snapshot()` call — including `screenshot`, `grid`, `grid_interval`, `crop`, and `monitor`. This means if the agent entered "screenshot mode", auto-snapshots also include screenshots. Pass `snapshot=false` to skip. For focus-changing shortcuts (Alt+Tab, Win+D), call `snapshot()` afterward to re-orient.
 
 Early termination is adaptive: BFS continues past the default candidate cap if no navigation elements (TabItem, MenuItem, TreeItem) have been collected yet, up to a hard cap.
 

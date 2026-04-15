@@ -13,7 +13,9 @@ mcp = FastMCP(
 		"Observe-act loop: call snapshot to get numbered UI element labels, then act with "
 		"click/type_text/scroll/shortcut/app. Action tools auto-snapshot after execution "
 		"(pass snapshot=false to skip). Scope snapshots to the target window for faster, "
-		"more complete results. Only enable screenshot when the UI tree alone is insufficient. "
+		"more complete results. Modal dialogs (File Open, Save As, Print) are children of "
+		"their parent window — scope to the parent app, not the dialog title. "
+		"Only enable screenshot when the UI tree alone is insufficient. "
 		"In address bars with autocomplete, use Ctrl+L to re-focus before typing a path. "
 		"All coordinates are logical pixels. Use the monitor parameter to work on different displays."
 	),

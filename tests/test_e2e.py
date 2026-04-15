@@ -117,8 +117,8 @@ def main():
 	test("After screenshot=False, returns dict", isinstance(auto2, dict), type(auto2).__name__)
 	test("No screenshot_path when screenshot=False", "screenshot_path" not in auto2.get("metadata", {}))
 
-	# ===== TEST 5: Unscoped Replay (shortcut path) =====
-	print("\n--- Test 5: Unscoped Replay (shortcut) ---")
+	# ===== TEST 5: Unscoped Replay (retained function) =====
+	print("\n--- Test 5: Unscoped Replay (retained function) ---")
 	desktop_state.last_snapshot_params["screenshot"] = True
 	desktop_state.last_snapshot_params["window"] = "SomeWindow"
 	unscoped = run_post_action_snapshot_unscoped(delay=0.01)
