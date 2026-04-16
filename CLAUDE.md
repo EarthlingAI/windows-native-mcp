@@ -35,13 +35,14 @@ These must remain true across all changes:
 2. **Snapshot `grid` defaults to `"rulers"`** — applied when screenshot is enabled, ignored otherwise
 3. **`crop` auto-enables screenshot; `grid` does not** — decoupled so grid default doesn't force screenshots
 4. **Both BFS paths use identical AABB intersection:** `right < vl or left > vr or bottom < vt or top > vb`
-5. **`resolve_target` handles string-encoded coordinate lists** — Pydantic union coercion converts `[x, y]` to `"[x, y]"` for `str | list[int] | None` params. The fallback JSON parse in `resolve_target` catches this for all tools.
+5. **Pydantic union coercion converts lists to JSON-encoded strings** — for any `list[int] | str | None` or similar union param, the MCP SDK delivers lists as `"[x, y]"` strings. Two helpers catch this: `resolve_target` in `core/state.py` (for all action tools' `target` param) and `_parse_list_param` in `tools/app.py` (for `size` and `position`). Any new tool accepting a list-or-something union must apply the same pattern.
 6. **Navigation heuristic: `_NAV_TYPES` + ListItem sibling count** — TabItem/MenuItem/TreeItem are always nav. ListItem with ≤10 same-type siblings = nav, >10 = data. This drives both reserved slots and adaptive termination.
 7. **All action tools use `run_post_action_snapshot()`** (window-scoped replay). `run_post_action_snapshot_unscoped()` remains in the codebase for potential future use but is not called by any current tool.
 8. **Auto-snapshot replays ALL stored params** from last explicit `snapshot()` — including `screenshot`, `grid`, `grid_interval`, `crop`, `monitor`. If agent was in screenshot mode, auto-snapshot stays in screenshot mode.
 9. **Cursor is always composited onto screenshots** — no parameter, no toggle. Uses Win32 `GetCursorInfo` with synthetic green arrow fallback.
 10. **Mouse input always uses `MOUSEEVENTF_VIRTUALDESK`** — coordinates map to full virtual desktop (all monitors), not just primary.
 11. **`_score_candidate` offscreen check uses monitor-relative bounds** via `screen_origin` parameter — elements on secondary monitors are scored correctly when that monitor is active.
+12. **Int params from MCP arrive as strings** — for any `int | str | None` union param (e.g. `monitor` in snapshot), the MCP SDK delivers `"2"` not `2`. Never branch on `isinstance(param, int)` — always coerce via `int(param)` with try/except. See `_coerce_monitor_index` in `tools/snapshot.py` for the reference pattern.
 
 ## Conventions
 

@@ -87,6 +87,8 @@ The `snapshot` tool supports a `monitor` parameter for working across multiple d
 
 Monitor metadata is included in every snapshot response (`monitors` array with index, rect, primary flag; `active_monitor` index). DPI scaling, viewport filtering, and element scoring are per-monitor.
 
+To place windows on a secondary monitor via the `app` tool (launch or resize), use the monitor's virtual-desktop coordinates in `position`. Monitors to the left of the primary have negative x values (visible in snapshot metadata). `position` works with both explicit `[w, h]` sizes and size presets — when a preset and position are both given, the preset supplies dimensions and the user-supplied position overrides placement.
+
 ### Cursor Compositing
 
 The system cursor is always composited onto screenshots via Win32 `GetCursorInfo`. No parameter or toggle — the cursor appears whenever it's visible on screen. Falls back to a synthetic bright green arrow if bitmap extraction fails. Cursor is drawn before annotations/grid/crop.

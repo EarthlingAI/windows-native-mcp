@@ -124,6 +124,24 @@ def _calculate_preset_rect(preset: str, screen_w: int, screen_h: int) -> tuple[i
 	return presets[preset]
 
 
+def _parse_list_param(param):
+	"""Parse a param that may be a list, a string-encoded list (from Pydantic MCP
+	union coercion, e.g. "[800, 600]"), or None. Returns a list, the original str
+	if not list-like, or None.
+	"""
+	if param is None or isinstance(param, list):
+		return param
+	if isinstance(param, str) and param.startswith("[") and param.endswith("]"):
+		import json
+		try:
+			parsed = json.loads(param)
+			if isinstance(parsed, list):
+				return parsed
+		except (json.JSONDecodeError, ValueError, TypeError):
+			pass
+	return param  # leave strings (preset names) untouched
+
+
 def _can_resolve(target: str) -> bool:
 	"""Check if target resolves to something launchable.
 
@@ -244,11 +262,11 @@ def register(mcp: FastMCP):
 		] = None,
 		size: Annotated[
 			list[int] | str | None,
-			Field(description='Window size for launch or resize mode. [width, height] or preset: "maximize", "left-half", "right-half", "center", etc.'),
+			Field(description='Window size for launch or resize mode. [width, height] or preset: "maximize", "left-half", "right-half", "top-half", "bottom-half", "top-left", "top-right", "bottom-left", "bottom-right", "center", "center-large"'),
 		] = None,
 		position: Annotated[
 			list[int] | None,
-			Field(description="[x, y] window position (used with size as [w,h])"),
+			Field(description="[x, y] window position. Works with either [w,h] size or a preset (preset supplies dimensions, position overrides placement). Use negative x for secondary monitors to the left"),
 		] = None,
 	) -> dict | list:
 		"""Manage application windows: launch, switch focus, resize, close, list, or restore.
@@ -259,6 +277,11 @@ def register(mcp: FastMCP):
 		Window matching uses exact then substring — not fuzzy.
 		If launch returns handle: null, use list-open after a few seconds.
 		"""
+		# Pydantic MCP union coercion may deliver lists as their string JSON
+		# representation (e.g. "[800, 600]") — parse these back into lists.
+		size = _parse_list_param(size)
+		position = _parse_list_param(position)
+
 		if mode == "list-open":
 			windows = get_window_list()
 			logging.info(f"App list-open: {len(windows)} windows")
@@ -358,7 +381,12 @@ def register(mcp: FastMCP):
 								user32.ShowWindow(hwnd, 3)  # SW_MAXIMIZE
 							elif isinstance(size, str):
 								screen_w, screen_h = get_screen_size()
-								x, y, w, h = _calculate_preset_rect(size, screen_w, screen_h)
+								preset_x, preset_y, w, h = _calculate_preset_rect(size, screen_w, screen_h)
+								# Explicit position overrides preset anchor
+								if position and len(position) == 2:
+									x, y = position
+								else:
+									x, y = preset_x, preset_y
 								user32.MoveWindow(hwnd, x, y, w, h, True)
 							elif isinstance(size, list) and len(size) == 2:
 								w, h = size
@@ -422,7 +450,12 @@ def register(mcp: FastMCP):
 					return {"resized": size, "handle": hwnd}
 
 				screen_w, screen_h = get_screen_size()
-				x, y, w, h = _calculate_preset_rect(size, screen_w, screen_h)
+				preset_x, preset_y, w, h = _calculate_preset_rect(size, screen_w, screen_h)
+				# Explicit position overrides preset's anchor (preset still defines w, h)
+				if position and len(position) == 2:
+					x, y = position
+				else:
+					x, y = preset_x, preset_y
 			elif isinstance(size, list) and len(size) == 2:
 				w, h = size
 				if position and len(position) == 2:

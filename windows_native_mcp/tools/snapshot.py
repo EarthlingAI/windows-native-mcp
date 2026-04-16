@@ -332,6 +332,20 @@ def run_post_action_snapshot_unscoped(delay: float = 0.15) -> dict:
 	return result
 
 
+def _coerce_monitor_index(monitor_param) -> int | None:
+	"""Coerce a monitor param to an int index.
+
+	The MCP protocol may deliver integer params as strings (e.g. "2" not 2).
+	Returns None for None, "all", or any value that cannot be converted.
+	"""
+	if monitor_param is None or monitor_param == "all":
+		return None
+	try:
+		return int(monitor_param)
+	except (ValueError, TypeError):
+		return None
+
+
 def _resolve_monitor(
 	monitor_param: int | str | None,
 	window: str | None,
@@ -346,8 +360,10 @@ def _resolve_monitor(
 	monitors = enumerate_monitors()
 	desktop_state.monitors = monitors
 
-	if isinstance(monitor_param, int):
-		return get_monitor_by_index(monitor_param, monitors)
+	# MCP protocol may send integer params as strings — coerce.
+	monitor_idx = _coerce_monitor_index(monitor_param)
+	if monitor_idx is not None:
+		return get_monitor_by_index(monitor_idx, monitors)
 
 	# Auto-detect from window if available
 	if window and desktop_state.window_handle:
@@ -459,14 +475,17 @@ def register(mcp: FastMCP):
 		result = _execute_snapshot(**tree_params)
 
 		# Now resolve monitor (may need window_handle from _execute_snapshot)
+		# MCP protocol may send integer params as strings — coerce.
 		if monitor == "all":
 			active_monitor = None
-		elif isinstance(monitor, int):
-			active_monitor = get_monitor_by_index(monitor, monitors)
-		elif window and desktop_state.window_handle:
-			active_monitor = get_monitor_for_window(desktop_state.window_handle, monitors)
 		else:
-			active_monitor = get_primary_monitor()
+			monitor_idx = _coerce_monitor_index(monitor)
+			if monitor_idx is not None:
+				active_monitor = get_monitor_by_index(monitor_idx, monitors)
+			elif window and desktop_state.window_handle:
+				active_monitor = get_monitor_for_window(desktop_state.window_handle, monitors)
+			else:
+				active_monitor = get_primary_monitor()
 
 		desktop_state.active_monitor = active_monitor
 
